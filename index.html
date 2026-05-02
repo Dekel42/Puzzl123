@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="he">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Crossword Solver</title>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -15,144 +16,150 @@
       overflow: hidden;
     }
 
-    /* ── Camera View ── */
-    #camera-view {
-      position: relative;
-      width: 100%;
-      height: 100dvh;
-    }
+    /* ── Camera view ── */
+    #camera-view { position: relative; width: 100%; height: 100dvh; }
 
-    #video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
+    #video { width: 100%; height: 100%; object-fit: cover; display: block; }
 
+    #capture-canvas { display: none; }
+
+    /* ── Language selector ── */
+    #lang-select {
+      position: absolute;
+      top: 16px; right: 16px;
+      background: rgba(0,0,0,0.65);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 14px;
+      cursor: pointer;
+      z-index: 10;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    #lang-select option { background: #111; color: #fff; }
+
+    /* ── Scan button ── */
     #scan-btn {
       position: absolute;
-      bottom: 48px;
-      left: 50%;
+      bottom: 48px; left: 50%;
       transform: translateX(-50%);
-      background: #fff;
-      color: #000;
-      border: none;
-      border-radius: 50%;
-      width: 72px;
-      height: 72px;
-      font-size: 13px;
-      font-weight: 700;
+      background: #fff; color: #000;
+      border: none; border-radius: 50%;
+      width: 72px; height: 72px;
+      font-size: 13px; font-weight: 700;
       letter-spacing: 0.5px;
       cursor: pointer;
       box-shadow: 0 4px 20px rgba(0,0,0,0.6);
       transition: transform 0.1s;
+      z-index: 10;
     }
     #scan-btn:active { transform: translateX(-50%) scale(0.92); }
 
-    /* ── Hidden capture canvas ── */
-    #capture-canvas { display: none; }
-
-    /* ── Processing Overlay ── */
+    /* ── Processing overlay ── */
     #processing-overlay {
       display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.88);
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.9);
       z-index: 100;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 20px;
+      gap: 18px;
+      padding: 24px;
     }
 
     #ad-placeholder {
-      width: 320px;
-      max-width: 90vw;
-      height: 50px;
+      width: 320px; max-width: 90vw; height: 50px;
       background: #1a1a1a;
       border: 1px dashed #444;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #555;
-      font-size: 12px;
-      border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+      color: #555; font-size: 12px; border-radius: 4px;
     }
 
     .spinner {
-      width: 52px;
-      height: 52px;
-      border: 5px solid #333;
-      border-top-color: #fff;
+      width: 48px; height: 48px;
+      border: 4px solid #333;
+      border-top-color: #00ff88;
       border-radius: 50%;
       animation: spin 0.75s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    #processing-overlay p { font-size: 20px; }
-    #processing-overlay small { color: #888; font-size: 14px; }
+    #step-label { font-size: 17px; font-weight: 600; min-height: 26px; }
 
-    /* ── Solution View ── */
+    #step-track {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .step-item {
+      font-size: 12px;
+      color: #555;
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid #333;
+      transition: background 0.25s, color 0.25s, border-color 0.25s;
+      white-space: nowrap;
+    }
+    .step-item.active { background: #fff;    color: #000; border-color: #fff; }
+    .step-item.done   { background: #22c55e; color: #fff; border-color: #22c55e; }
+
+    /* ── Error panel ── */
+    #error-panel {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.93);
+      z-index: 110;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      padding: 32px;
+      text-align: center;
+    }
+    #error-panel h2 { font-size: 22px; color: #f87171; }
+    #error-msg { color: #aaa; font-size: 15px; line-height: 1.6; }
+    #error-back-btn {
+      background: #fff; color: #000;
+      border: none; border-radius: 24px;
+      padding: 12px 32px; font-size: 16px; font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* ── Solution view ── */
     #solution-view {
       display: none;
-      position: fixed;
-      inset: 0;
+      position: fixed; inset: 0;
       background: #000;
       z-index: 50;
       flex-direction: column;
     }
-
     #solution-wrapper {
-      position: relative;
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      position: relative; flex: 1;
+      display: flex; align-items: center; justify-content: center;
       overflow: hidden;
     }
+    #solution-canvas { max-width: 100%; max-height: 100%; display: block; }
 
-    #solution-canvas {
-      max-width: 100%;
-      max-height: 100%;
-      display: block;
-    }
-
-    /* Answer labels rendered relative to #solution-wrapper */
-    .answer-label {
-      position: absolute;
-      color: #00ff88;
-      font-size: clamp(13px, 3vw, 20px);
-      font-weight: 700;
-      text-shadow: 0 0 6px #000, 0 0 12px rgba(0,255,136,0.6);
-      pointer-events: none;
-      white-space: nowrap;
-      transform: translate(-50%, -50%);
-    }
-
-    /* ── Bottom bar (toggle) ── */
+    /* ── Bottom bar ── */
     #bottom-bar {
       display: none;
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
+      position: fixed; bottom: 0; left: 0; right: 0;
       padding: 14px 20px;
       background: linear-gradient(transparent, rgba(0,0,0,0.85));
       z-index: 200;
       justify-content: center;
     }
-
     #toggle-btn {
-      background: #00cc66;
-      color: #fff;
-      border: none;
-      border-radius: 28px;
-      padding: 13px 36px;
-      font-size: 16px;
-      font-weight: 600;
+      background: #00cc66; color: #fff;
+      border: none; border-radius: 28px;
+      padding: 13px 36px; font-size: 16px; font-weight: 600;
       cursor: pointer;
       box-shadow: 0 4px 16px rgba(0,204,102,0.35);
-      transition: background 0.2s, transform 0.1s;
+      transition: transform 0.1s;
     }
     #toggle-btn:active { transform: scale(0.95); }
   </style>
@@ -163,6 +170,7 @@
   <div id="camera-view">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="capture-canvas"></canvas>
+    <select id="lang-select"></select>
     <button id="scan-btn">SCAN</button>
   </div>
 
@@ -170,140 +178,507 @@
   <div id="processing-overlay">
     <div id="ad-placeholder">[ Advertisement ]</div>
     <div class="spinner"></div>
-    <p>Processing…</p>
-    <small>Analyzing your crossword</small>
+    <div id="step-label">Initializing…</div>
+    <div id="step-track"></div>
+  </div>
+
+  <!-- ── Error Panel ── -->
+  <div id="error-panel">
+    <h2>Grid not detected</h2>
+    <p id="error-msg">Make sure the crossword fills most of the frame, is well-lit, and held flat.</p>
+    <button id="error-back-btn">↩ Try Again</button>
   </div>
 
   <!-- ── Solution View ── -->
   <div id="solution-view">
     <div id="solution-wrapper">
       <canvas id="solution-canvas"></canvas>
-      <!-- .answer-label elements injected here at render time -->
     </div>
   </div>
 
-  <!-- ── Toggle Bar (appears after first scan) ── -->
+  <!-- ── Bottom Bar ── -->
   <div id="bottom-bar">
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
   <script>
-    // ──────────────────────────────────────────────
-    // Firebase config — replace with your project values
-    // Project user: omerdekelmigdal100
-    // ──────────────────────────────────────────────
-    const firebaseConfig = {
-      apiKey:            "YOUR_API_KEY",
-      authDomain:        "puzzl123.firebaseapp.com",
-      projectId:         "puzzl123",
-      storageBucket:     "puzzl123.appspot.com",
-      messagingSenderId: "YOUR_SENDER_ID",
-      appId:             "YOUR_APP_ID"
+  // ─────────────────────────────────────────────────────────────────────────
+  // Firebase config  (User: omerdekelmigdal100)
+  // Replace YOUR_* values from Firebase Console → Project settings → Your apps
+  // ─────────────────────────────────────────────────────────────────────────
+  const firebaseConfig = {
+    apiKey:            "YOUR_API_KEY",
+    authDomain:        "puzzl123.firebaseapp.com",
+    projectId:         "puzzl123",
+    storageBucket:     "puzzl123.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId:             "YOUR_APP_ID"
+  };
+  // import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+  // const app = initializeApp(firebaseConfig);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONFIG
+  // ─────────────────────────────────────────────────────────────────────────
+  const CONFIG = {
+    DARK_PROFILE_THRESHOLD : 0.35,  // fraction of dark pixels to count as a grid line
+    MIN_CELL_DIVISOR       : 30,    // MIN_CELL = min(W,H) / this
+    MIN_GRID_LINES         : 4,     // fewer than this lines in either axis → error
+    CELL_INSET_FRACTION    : 0.15,  // inset % per side when sampling cell color
+    ACROSS_COLOR           : '#16a34a',
+    DOWN_COLOR             : '#2563eb',
+    TEXT_COLOR             : '#ffffff',
+    PILL_PAD_X             : 7,
+    PILL_PAD_Y             : 4,
+    PILL_RADIUS            : 5,
+  };
+
+  const LANGUAGES = [
+    { code: 'heb', label: 'עברית'   },
+    { code: 'eng', label: 'English' },
+    { code: 'ara', label: 'عربي'    },
+    { code: 'spa', label: 'Español' },
+    { code: 'fra', label: 'Français'},
+    { code: 'deu', label: 'Deutsch' },
+    { code: 'rus', label: 'Русский' },
+    { code: 'tur', label: 'Türkçe'  },
+  ];
+
+  const STEPS = ['Capture', 'Detect grid', 'Map slots', 'OCR', 'Solve'];
+  const LS_LANG = 'puzzl_lang';
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DOM REFS
+  // ─────────────────────────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+  const video             = $('video');
+  const captureCanvas     = $('capture-canvas');
+  const scanBtn           = $('scan-btn');
+  const processingOverlay = $('processing-overlay');
+  const stepLabel         = $('step-label');
+  const stepTrack         = $('step-track');
+  const solutionView      = $('solution-view');
+  const solutionCanvas    = $('solution-canvas');
+  const bottomBar         = $('bottom-bar');
+  const toggleBtn         = $('toggle-btn');
+  const langSelect        = $('lang-select');
+  const errorPanel        = $('error-panel');
+  const errorMsg          = $('error-msg');
+  const errorBackBtn      = $('error-back-btn');
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // STATE
+  // ─────────────────────────────────────────────────────────────────────────
+  const state = {
+    hasSolution    : false,
+    inSolutionMode : false,
+    worker         : null,
+    workerLang     : null,
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CAMERA
+  // ─────────────────────────────────────────────────────────────────────────
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+    } catch (err) {
+      alert('Camera unavailable: ' + err.message);
+    }
+  }
+
+  function captureFrame() {
+    captureCanvas.width  = video.videoWidth  || 640;
+    captureCanvas.height = video.videoHeight || 480;
+    captureCanvas.getContext('2d').drawImage(video, 0, 0);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GRID DETECTION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Extract luminance-weighted grayscale from RGBA ImageData buffer
+  function toGray(data, size) {
+    const g = new Uint8Array(size);
+    for (let i = 0; i < size; i++)
+      g[i] = (data[i*4]*77 + data[i*4+1]*150 + data[i*4+2]*29) >> 8;
+    return g;
+  }
+
+  // Otsu's global threshold — maximises between-class variance
+  function otsu(gray) {
+    const hist = new Int32Array(256);
+    for (const v of gray) hist[v]++;
+    const N = gray.length;
+    let sum = 0;
+    for (let i = 0; i < 256; i++) sum += i * hist[i];
+    let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (!wB) continue;
+      const wF = N - wB;
+      if (!wF) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB, mF = (sum - sumB) / wF;
+      const v = wB * wF * (mB - mF) ** 2;
+      if (v > maxVar) { maxVar = v; thresh = t; }
+    }
+    // Fall back to 128 if image is very low-contrast
+    return (thresh > 30 && thresh < 220) ? thresh : 128;
+  }
+
+  // Fraction of pixels below threshold for each row and column
+  function buildProfiles(gray, W, H, thresh) {
+    const rowP = new Float32Array(H);
+    const colP = new Float32Array(W);
+    for (let y = 0; y < H; y++) {
+      let d = 0;
+      for (let x = 0; x < W; x++) if (gray[y*W + x] < thresh) d++;
+      rowP[y] = d / W;
+    }
+    for (let x = 0; x < W; x++) {
+      let d = 0;
+      for (let y = 0; y < H; y++) if (gray[y*W + x] < thresh) d++;
+      colP[x] = d / H;
+    }
+    return { rowP, colP };
+  }
+
+  // Find contiguous runs above threshold; return their midpoints, enforcing minGap
+  function peakMidpoints(profile, threshold, minGap) {
+    const out = [];
+    let in_ = false, start = 0;
+    for (let i = 0; i <= profile.length; i++) {
+      const v = i < profile.length ? profile[i] : 0;
+      if (v >= threshold && !in_) { in_ = true; start = i; }
+      else if (v < threshold && in_) {
+        in_ = false;
+        const mid = (start + i - 1) >> 1;
+        if (!out.length || mid - out[out.length - 1] >= minGap) out.push(mid);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Detect crossword grid lines in the captured canvas.
+   * @returns {{ rowLines, colLines, thresh, W, H } | null}
+   */
+  function detectGrid(canvas) {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const gray = toGray(ctx.getImageData(0, 0, W, H).data, W * H);
+    const thresh = otsu(gray);
+    const minCell = Math.floor(Math.min(W, H) / CONFIG.MIN_CELL_DIVISOR);
+    const { rowP, colP } = buildProfiles(gray, W, H, thresh);
+    const rowLines = peakMidpoints(rowP, CONFIG.DARK_PROFILE_THRESHOLD, minCell * 0.5);
+    const colLines = peakMidpoints(colP, CONFIG.DARK_PROFILE_THRESHOLD, minCell * 0.5);
+    if (rowLines.length < CONFIG.MIN_GRID_LINES || colLines.length < CONFIG.MIN_GRID_LINES) return null;
+    return { rowLines, colLines, gray, thresh, W, H };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SLOT EXTRACTION
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // A cell is "open" (white/light) if more than half its interior is above threshold
+  function isCellOpen(gray, W, rowLines, colLines, r, c, thresh) {
+    const x0 = colLines[c], x1 = colLines[c + 1];
+    const y0 = rowLines[r], y1 = rowLines[r + 1];
+    const inX = Math.ceil((x1 - x0) * CONFIG.CELL_INSET_FRACTION);
+    const inY = Math.ceil((y1 - y0) * CONFIG.CELL_INSET_FRACTION);
+    let light = 0, total = 0;
+    for (let y = y0 + inY; y < y1 - inY; y += 2) {
+      for (let x = x0 + inX; x < x1 - inX; x += 2) {
+        if (gray[y * W + x] >= thresh) light++;
+        total++;
+      }
+    }
+    return total > 0 && light / total > 0.5;
+  }
+
+  function buildSlot(dir, startR, startC, len, rowLines, colLines) {
+    return {
+      direction : dir,
+      length    : len,
+      x         : colLines[startC],
+      y         : rowLines[startR],
+      cellW     : (colLines[startC + (dir === 'across' ? len : 1)] - colLines[startC]) / (dir === 'across' ? len : 1),
+      cellH     : (rowLines[startR + (dir === 'down'   ? len : 1)] - rowLines[startR]) / (dir === 'down'   ? len : 1),
     };
-    // Uncomment to initialise Firebase once your config is set:
-    // import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
-    // const app = initializeApp(firebaseConfig);
+  }
 
-    // ──────────────────────────────────────────────
-    // Hardcoded mock answers  (x%, y% of canvas size)
-    // ──────────────────────────────────────────────
-    const MOCK_ANSWERS = [
-      { x: 18, y: 22, text: "APPLE"  },
-      { x: 58, y: 34, text: "BRAIN"  },
-      { x: 33, y: 52, text: "CLOUD"  },
-      { x: 72, y: 67, text: "DANCE"  },
-      { x: 12, y: 78, text: "EAGLE"  },
-      { x: 50, y: 15, text: "FROST"  },
-      { x: 80, y: 45, text: "GLOBE"  },
-    ];
+  function extractSlots(grid) {
+    const { rowLines, colLines, gray, thresh, W } = grid;
+    const rows = rowLines.length - 1;
+    const cols = colLines.length - 1;
+    const slots = [];
 
-    // DOM refs
-    const video             = document.getElementById('video');
-    const captureCanvas     = document.getElementById('capture-canvas');
-    const scanBtn           = document.getElementById('scan-btn');
-    const processingOverlay = document.getElementById('processing-overlay');
-    const solutionView      = document.getElementById('solution-view');
-    const solutionCanvas    = document.getElementById('solution-canvas');
-    const solutionWrapper   = document.getElementById('solution-wrapper');
-    const bottomBar         = document.getElementById('bottom-bar');
-    const toggleBtn         = document.getElementById('toggle-btn');
-
-    let hasSolution = false;
-    let inSolutionMode = false;
-
-    // ── Camera ──────────────────────────────────
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
-          audio: false
-        });
-        video.srcObject = stream;
-      } catch (err) {
-        alert('Camera unavailable: ' + err.message);
+    // Across
+    for (let r = 0; r < rows; r++) {
+      let run = 0, sc = 0;
+      for (let c = 0; c <= cols; c++) {
+        if (c < cols && isCellOpen(gray, W, rowLines, colLines, r, c, thresh)) {
+          if (!run) sc = c;
+          run++;
+        } else {
+          if (run >= 2) slots.push(buildSlot('across', r, sc, run, rowLines, colLines));
+          run = 0;
+        }
       }
     }
 
-    // ── Capture current video frame ──────────────
-    function captureFrame() {
-      captureCanvas.width  = video.videoWidth  || 640;
-      captureCanvas.height = video.videoHeight || 480;
-      captureCanvas.getContext('2d').drawImage(video, 0, 0);
+    // Down
+    for (let c = 0; c < cols; c++) {
+      let run = 0, sr = 0;
+      for (let r = 0; r <= rows; r++) {
+        if (r < rows && isCellOpen(gray, W, rowLines, colLines, r, c, thresh)) {
+          if (!run) sr = r;
+          run++;
+        } else {
+          if (run >= 2) slots.push(buildSlot('down', sr, c, run, rowLines, colLines));
+          run = 0;
+        }
+      }
     }
 
-    // ── Render solution view ─────────────────────
-    function renderSolution() {
-      processingOverlay.style.display = 'none';
+    return slots;
+  }
 
-      // Copy captured frame onto solution canvas
-      solutionCanvas.width  = captureCanvas.width;
-      solutionCanvas.height = captureCanvas.height;
-      solutionCanvas.getContext('2d').drawImage(captureCanvas, 0, 0);
+  // ─────────────────────────────────────────────────────────────────────────
+  // TESSERACT
+  // ─────────────────────────────────────────────────────────────────────────
 
-      // Remove previous answer labels
-      solutionWrapper.querySelectorAll('.answer-label').forEach(el => el.remove());
+  async function ensureWorker(lang) {
+    if (state.worker && state.workerLang === lang) return state.worker;
+    if (state.worker) { await state.worker.terminate(); state.worker = null; }
+    state.worker     = await Tesseract.createWorker(lang, 1, { logger: () => {} });
+    state.workerLang = lang;
+    return state.worker;
+  }
 
-      // Inject answer labels positioned as % of wrapper size
-      MOCK_ANSWERS.forEach(({ x, y, text }) => {
-        const label = document.createElement('div');
-        label.className = 'answer-label';
-        label.textContent = text;
-        label.style.left = x + '%';
-        label.style.top  = y + '%';
-        solutionWrapper.appendChild(label);
-      });
+  async function runOCR(canvas, lang) {
+    const w = await ensureWorker(lang);
+    await w.recognize(canvas);
+    // Letter content intentionally discarded — only slot length (integer) matters
+  }
 
-      hasSolution = true;
-      showSolutionView();
+  // ─────────────────────────────────────────────────────────────────────────
+  // MOCK SOLVER
+  // Sends slot.length (integer) — no partial letters, ever.
+  // TODO: replace with Cloud Function → pitaronfree fallback when solver is ready
+  // ─────────────────────────────────────────────────────────────────────────
+  function solve(slots) {
+    return slots.map(slot => ({
+      slot,
+      answer: `${slot.length}${slot.direction === 'across' ? '→' : '↓'}`,
+    }));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CANVAS RENDERER
+  // Draws everything directly on #solution-canvas — no CSS-positioned divs.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Polyfill for roundRect (Chrome < 99, Safari < 15.4, Firefox < 112)
+  function polyfillRoundRect() {
+    if (CanvasRenderingContext2D.prototype.roundRect) return;
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+      if (w < 2 * r) r = w / 2;
+      if (h < 2 * r) r = h / 2;
+      this.beginPath();
+      this.moveTo(x + r, y);
+      this.arcTo(x + w, y,     x + w, y + h, r);
+      this.arcTo(x + w, y + h, x,     y + h, r);
+      this.arcTo(x,     y + h, x,     y,     r);
+      this.arcTo(x,     y,     x + w, y,     r);
+      this.closePath();
+    };
+  }
+
+  function drawPill(ctx, text, x, y, cellW, cellH, color) {
+    const fontSize = Math.max(10, Math.round(Math.min(cellW, cellH) / 3));
+    ctx.save();
+    ctx.font         = `bold ${fontSize}px Arial`;
+    ctx.direction    = 'ltr';   // pill text is always ASCII digits + arrows
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'middle';
+
+    const tw = ctx.measureText(text).width;
+    const pw = tw + CONFIG.PILL_PAD_X * 2;
+    const ph = fontSize + CONFIG.PILL_PAD_Y * 2;
+    const px = x + 2;
+    const py = y + (cellH - ph) / 2;
+
+    ctx.fillStyle = color;
+    ctx.roundRect(px, py, pw, ph, CONFIG.PILL_RADIUS);
+    ctx.fill();
+
+    ctx.fillStyle = CONFIG.TEXT_COLOR;
+    ctx.fillText(text, px + CONFIG.PILL_PAD_X, py + ph / 2);
+    ctx.restore();
+  }
+
+  function renderSolution(solutions) {
+    solutionCanvas.width  = captureCanvas.width;
+    solutionCanvas.height = captureCanvas.height;
+    const ctx = solutionCanvas.getContext('2d');
+    ctx.drawImage(captureCanvas, 0, 0);
+
+    for (const { slot, answer } of solutions) {
+      const color = slot.direction === 'across' ? CONFIG.ACROSS_COLOR : CONFIG.DOWN_COLOR;
+
+      // Subtle tint on first cell
+      ctx.fillStyle = slot.direction === 'across'
+        ? 'rgba(22,163,74,0.25)'
+        : 'rgba(37,99,235,0.25)';
+      ctx.fillRect(slot.x + 1, slot.y + 1, slot.cellW - 2, slot.cellH - 2);
+
+      drawPill(ctx, answer, slot.x, slot.y, slot.cellW, slot.cellH, color);
     }
+  }
 
-    function showSolutionView() {
-      solutionView.style.display = 'flex';
-      bottomBar.style.display    = 'flex';
-      toggleBtn.textContent      = '📷 Back to Camera';
-      inSolutionMode             = true;
-    }
+  // ─────────────────────────────────────────────────────────────────────────
+  // PIPELINE
+  // ─────────────────────────────────────────────────────────────────────────
 
-    function showCameraView() {
-      solutionView.style.display = 'none';
-      inSolutionMode             = false;
-      toggleBtn.textContent      = '🔍 View Solution';
-    }
+  const yieldUI = () => new Promise(r => setTimeout(r, 16));
 
-    // ── Event listeners ──────────────────────────
-    scanBtn.addEventListener('click', () => {
+  function setStep(i) {
+    stepLabel.textContent = STEPS[i];
+    [...stepTrack.children].forEach((el, j) => {
+      el.classList.toggle('active', j === i);
+      el.classList.toggle('done',   j <  i);
+    });
+  }
+
+  function showError(msg) {
+    processingOverlay.style.display = 'none';
+    errorMsg.textContent = msg;
+    errorPanel.style.display = 'flex';
+  }
+
+  async function runPipeline() {
+    [...stepTrack.children].forEach(el => el.className = 'step-item');
+    processingOverlay.style.display = 'flex';
+    errorPanel.style.display        = 'none';
+
+    try {
+      // 0 — Capture
+      setStep(0);
       captureFrame();
-      processingOverlay.style.display = 'flex';
-      setTimeout(renderSolution, 3000);
-    });
 
-    toggleBtn.addEventListener('click', () => {
-      if (inSolutionMode) showCameraView();
-      else                showSolutionView();
-    });
+      // 1 — Detect grid
+      setStep(1);
+      await yieldUI();
+      const grid = detectGrid(captureCanvas);
+      if (!grid) {
+        showError('Could not find the crossword grid.\nEnsure the puzzle fills the frame, is well-lit, and held flat.');
+        return;
+      }
 
-    // ── Boot ─────────────────────────────────────
-    startCamera();
+      // 2 — Map slots
+      setStep(2);
+      await yieldUI();
+      const slots = extractSlots(grid);
+      if (!slots.length) {
+        showError('Grid detected but no word slots found. Try a clearer photo.');
+        return;
+      }
+
+      // 3 — OCR (initialise Tesseract for selected language; result reserved)
+      setStep(3);
+      await runOCR(captureCanvas, langSelect.value);
+
+      // 4 — Solve
+      setStep(4);
+      await yieldUI();
+      const solutions = solve(slots);
+
+      // Render & show
+      renderSolution(solutions);
+      state.hasSolution    = true;
+      state.inSolutionMode = true;
+      processingOverlay.style.display = 'none';
+      solutionView.style.display      = 'flex';
+      bottomBar.style.display         = 'flex';
+      toggleBtn.textContent           = '📷 Back to Camera';
+
+    } catch (err) {
+      showError('Processing failed: ' + err.message);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // UI INIT
+  // ─────────────────────────────────────────────────────────────────────────
+
+  function initLangSelector() {
+    const saved = localStorage.getItem(LS_LANG) || 'heb';
+    LANGUAGES.forEach(({ code, label }) => {
+      const opt = document.createElement('option');
+      opt.value       = code;
+      opt.textContent = label;
+      if (code === saved) opt.selected = true;
+      langSelect.appendChild(opt);
+    });
+    langSelect.addEventListener('change', () => {
+      localStorage.setItem(LS_LANG, langSelect.value);
+      if (state.worker && state.workerLang !== langSelect.value) {
+        state.worker.terminate();
+        state.worker = state.workerLang = null;
+      }
+    });
+  }
+
+  function initStepTrack() {
+    STEPS.forEach(label => {
+      const el = document.createElement('div');
+      el.className   = 'step-item';
+      el.textContent = label;
+      stepTrack.appendChild(el);
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EVENTS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  scanBtn.addEventListener('click', runPipeline);
+
+  toggleBtn.addEventListener('click', () => {
+    if (state.inSolutionMode) {
+      solutionView.style.display = 'none';
+      state.inSolutionMode       = false;
+      toggleBtn.textContent      = '🔍 View Solution';
+    } else {
+      solutionView.style.display = 'flex';
+      state.inSolutionMode       = true;
+      toggleBtn.textContent      = '📷 Back to Camera';
+    }
+  });
+
+  errorBackBtn.addEventListener('click', () => {
+    errorPanel.style.display = 'none';
+  });
+
+  // Terminate Tesseract worker cleanly on navigation/close
+  window.addEventListener('pagehide', () => state.worker?.terminate());
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BOOT
+  // ─────────────────────────────────────────────────────────────────────────
+  polyfillRoundRect();
+  initLangSelector();
+  initStepTrack();
+  startCamera();
+
+  // Warm up Tesseract worker in background so first scan is faster
+  ensureWorker(langSelect.value).catch(() => {});
   </script>
 </body>
 </html>
