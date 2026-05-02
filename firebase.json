@@ -5,7 +5,12 @@
       "firebase.json",
       ".firebaserc",
       ".gitignore",
-      "*.md"
+      "*.md",
+      "*.bat",
+      ".git/**",
+      ".firebase/**",
+      ".claude/**",
+      "node_modules/**"
     ],
     "rewrites": [
       { "source": "**", "destination": "/index.html" }
