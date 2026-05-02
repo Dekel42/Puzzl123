@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crossword Solver</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ── Camera View ── */
+    #camera-view {
+      position: relative;
+      width: 100%;
+      height: 100dvh;
+    }
+
+    #video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    #scan-btn {
+      position: absolute;
+      bottom: 48px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #fff;
+      color: #000;
+      border: none;
+      border-radius: 50%;
+      width: 72px;
+      height: 72px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      transition: transform 0.1s;
+    }
+    #scan-btn:active { transform: translateX(-50%) scale(0.92); }
+
+    /* ── Hidden capture canvas ── */
+    #capture-canvas { display: none; }
+
+    /* ── Processing Overlay ── */
+    #processing-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.88);
+      z-index: 100;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+    }
+
+    #ad-placeholder {
+      width: 320px;
+      max-width: 90vw;
+      height: 50px;
+      background: #1a1a1a;
+      border: 1px dashed #444;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #555;
+      font-size: 12px;
+      border-radius: 4px;
+    }
+
+    .spinner {
+      width: 52px;
+      height: 52px;
+      border: 5px solid #333;
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #processing-overlay p { font-size: 20px; }
+    #processing-overlay small { color: #888; font-size: 14px; }
+
+    /* ── Solution View ── */
+    #solution-view {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #000;
+      z-index: 50;
+      flex-direction: column;
+    }
+
+    #solution-wrapper {
+      position: relative;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #solution-canvas {
+      max-width: 100%;
+      max-height: 100%;
+      display: block;
+    }
+
+    /* Answer labels rendered relative to #solution-wrapper */
+    .answer-label {
+      position: absolute;
+      color: #00ff88;
+      font-size: clamp(13px, 3vw, 20px);
+      font-weight: 700;
+      text-shadow: 0 0 6px #000, 0 0 12px rgba(0,255,136,0.6);
+      pointer-events: none;
+      white-space: nowrap;
+      transform: translate(-50%, -50%);
+    }
+
+    /* ── Bottom bar (toggle) ── */
+    #bottom-bar {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 14px 20px;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      z-index: 200;
+      justify-content: center;
+    }
+
+    #toggle-btn {
+      background: #00cc66;
+      color: #fff;
+      border: none;
+      border-radius: 28px;
+      padding: 13px 36px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0,204,102,0.35);
+      transition: background 0.2s, transform 0.1s;
+    }
+    #toggle-btn:active { transform: scale(0.95); }
+  </style>
+</head>
+<body>
+
+  <!-- ── Camera View ── -->
+  <div id="camera-view">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="capture-canvas"></canvas>
+    <button id="scan-btn">SCAN</button>
+  </div>
+
+  <!-- ── Processing Overlay ── -->
+  <div id="processing-overlay">
+    <div id="ad-placeholder">[ Advertisement ]</div>
+    <div class="spinner"></div>
+    <p>Processing…</p>
+    <small>Analyzing your crossword</small>
+  </div>
+
+  <!-- ── Solution View ── -->
+  <div id="solution-view">
+    <div id="solution-wrapper">
+      <canvas id="solution-canvas"></canvas>
+      <!-- .answer-label elements injected here at render time -->
+    </div>
+  </div>
+
+  <!-- ── Toggle Bar (appears after first scan) ── -->
+  <div id="bottom-bar">
+    <button id="toggle-btn">📷 Back to Camera</button>
+  </div>
+
+  <script>
+    // ──────────────────────────────────────────────
+    // Firebase config — replace with your project values
+    // Project user: omerdekelmigdal100
+    // ──────────────────────────────────────────────
+    const firebaseConfig = {
+      apiKey:            "YOUR_API_KEY",
+      authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+      projectId:         "YOUR_PROJECT_ID",
+      storageBucket:     "YOUR_PROJECT_ID.appspot.com",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId:             "YOUR_APP_ID"
+    };
+    // Uncomment to initialise Firebase once your config is set:
+    // import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+    // const app = initializeApp(firebaseConfig);
+
+    // ──────────────────────────────────────────────
+    // Hardcoded mock answers  (x%, y% of canvas size)
+    // ──────────────────────────────────────────────
+    const MOCK_ANSWERS = [
+      { x: 18, y: 22, text: "APPLE"  },
+      { x: 58, y: 34, text: "BRAIN"  },
+      { x: 33, y: 52, text: "CLOUD"  },
+      { x: 72, y: 67, text: "DANCE"  },
+      { x: 12, y: 78, text: "EAGLE"  },
+      { x: 50, y: 15, text: "FROST"  },
+      { x: 80, y: 45, text: "GLOBE"  },
+    ];
+
+    // DOM refs
+    const video             = document.getElementById('video');
+    const captureCanvas     = document.getElementById('capture-canvas');
+    const scanBtn           = document.getElementById('scan-btn');
+    const processingOverlay = document.getElementById('processing-overlay');
+    const solutionView      = document.getElementById('solution-view');
+    const solutionCanvas    = document.getElementById('solution-canvas');
+    const solutionWrapper   = document.getElementById('solution-wrapper');
+    const bottomBar         = document.getElementById('bottom-bar');
+    const toggleBtn         = document.getElementById('toggle-btn');
+
+    let hasSolution = false;
+    let inSolutionMode = false;
+
+    // ── Camera ──────────────────────────────────
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+          audio: false
+        });
+        video.srcObject = stream;
+      } catch (err) {
+        alert('Camera unavailable: ' + err.message);
+      }
+    }
+
+    // ── Capture current video frame ──────────────
+    function captureFrame() {
+      captureCanvas.width  = video.videoWidth  || 640;
+      captureCanvas.height = video.videoHeight || 480;
+      captureCanvas.getContext('2d').drawImage(video, 0, 0);
+    }
+
+    // ── Render solution view ─────────────────────
+    function renderSolution() {
+      processingOverlay.style.display = 'none';
+
+      // Copy captured frame onto solution canvas
+      solutionCanvas.width  = captureCanvas.width;
+      solutionCanvas.height = captureCanvas.height;
+      solutionCanvas.getContext('2d').drawImage(captureCanvas, 0, 0);
+
+      // Remove previous answer labels
+      solutionWrapper.querySelectorAll('.answer-label').forEach(el => el.remove());
+
+      // Inject answer labels positioned as % of wrapper size
+      MOCK_ANSWERS.forEach(({ x, y, text }) => {
+        const label = document.createElement('div');
+        label.className = 'answer-label';
+        label.textContent = text;
+        label.style.left = x + '%';
+        label.style.top  = y + '%';
+        solutionWrapper.appendChild(label);
+      });
+
+      hasSolution = true;
+      showSolutionView();
+    }
+
+    function showSolutionView() {
+      solutionView.style.display = 'flex';
+      bottomBar.style.display    = 'flex';
+      toggleBtn.textContent      = '📷 Back to Camera';
+      inSolutionMode             = true;
+    }
+
+    function showCameraView() {
+      solutionView.style.display = 'none';
+      inSolutionMode             = false;
+      toggleBtn.textContent      = '🔍 View Solution';
+    }
+
+    // ── Event listeners ──────────────────────────
+    scanBtn.addEventListener('click', () => {
+      captureFrame();
+      processingOverlay.style.display = 'flex';
+      setTimeout(renderSolution, 3000);
+    });
+
+    toggleBtn.addEventListener('click', () => {
+      if (inSolutionMode) showCameraView();
+      else                showSolutionView();
+    });
+
+    // ── Boot ─────────────────────────────────────
+    startCamera();
+  </script>
+</body>
+</html>
