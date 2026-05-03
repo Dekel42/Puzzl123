@@ -274,6 +274,7 @@
     inSolutionMode : false,
     worker         : null,
     workerLang     : null,
+    dictIndex      : null,   // Map<length, Array<{clue, answer}>>
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -468,15 +469,58 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // MOCK SOLVER
-  // Sends slot.length (integer) — no partial letters, ever.
-  // TODO: replace with Cloud Function → pitaronfree fallback when solver is ready
+  // DICTIONARY
+  // Format: "clue - answer1, answer2, ..."  (Hebrew or English)
+  // Indexed by answer length for O(1) lookup.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  function parseDictionary(text) {
+    const index = new Map();
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      const sep = line.indexOf(' - ');
+      if (sep === -1) continue;
+      const clue   = line.slice(0, sep).trim();
+      const answers = line.slice(sep + 3).split(',').map(a => a.trim()).filter(Boolean);
+      for (const answer of answers) {
+        const len = [...answer].length;   // spread handles any multi-codepoint chars
+        if (!index.has(len)) index.set(len, []);
+        index.get(len).push({ clue, answer });
+      }
+    }
+    return index;
+  }
+
+  async function loadDictionary() {
+    try {
+      const res = await fetch('./dict.txt');
+      if (!res.ok) return;
+      state.dictIndex = parseDictionary(await res.text());
+    } catch (e) {
+      console.warn('Dictionary unavailable:', e.message);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SOLVER
+  // Looks up slot.length in dictionary. Falls back to numeric label if no match.
+  // Sends length (integer) only — no partial letters, ever.
+  // TODO: add Cloud Function → pitaronfree as secondary fallback
   // ─────────────────────────────────────────────────────────────────────────
   function solve(slots) {
-    return slots.map(slot => ({
-      slot,
-      answer: `${slot.length}${slot.direction === 'across' ? '→' : '↓'}`,
-    }));
+    return slots.map(slot => {
+      const candidates = state.dictIndex?.get(slot.length) ?? [];
+      let label;
+      if (!candidates.length) {
+        label = `${slot.length}${slot.direction === 'across' ? '→' : '↓'}`;
+      } else if (candidates.length === 1) {
+        label = candidates[0].answer;
+      } else {
+        label = `${candidates[0].answer} +${candidates.length - 1}`;
+      }
+      return { slot, answer: label, candidates };
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -500,12 +544,15 @@
     };
   }
 
+  // Detect Hebrew or Arabic characters (need RTL canvas rendering)
+  const isRTL = text => /[֐-׿؀-ۿ]/.test(text);
+
   function drawPill(ctx, text, x, y, cellW, cellH, color) {
+    const rtl      = isRTL(text);
     const fontSize = Math.max(10, Math.round(Math.min(cellW, cellH) / 3));
     ctx.save();
     ctx.font         = `bold ${fontSize}px Arial`;
-    ctx.direction    = 'ltr';   // pill text is always ASCII digits + arrows
-    ctx.textAlign    = 'left';
+    ctx.direction    = rtl ? 'rtl' : 'ltr';
     ctx.textBaseline = 'middle';
 
     const tw = ctx.measureText(text).width;
@@ -519,7 +566,13 @@
     ctx.fill();
 
     ctx.fillStyle = CONFIG.TEXT_COLOR;
-    ctx.fillText(text, px + CONFIG.PILL_PAD_X, py + ph / 2);
+    if (rtl) {
+      ctx.textAlign = 'right';
+      ctx.fillText(text, px + pw - CONFIG.PILL_PAD_X, py + ph / 2);
+    } else {
+      ctx.textAlign = 'left';
+      ctx.fillText(text, px + CONFIG.PILL_PAD_X, py + ph / 2);
+    }
     ctx.restore();
   }
 
@@ -676,6 +729,7 @@
   initLangSelector();
   initStepTrack();
   startCamera();
+  loadDictionary();
 
   // Warm up Tesseract worker in background so first scan is faster
   ensureWorker(langSelect.value).catch(() => {});
