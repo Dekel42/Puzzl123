@@ -212,7 +212,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.7</div>
+  <div id="version">v0.8</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -673,9 +673,9 @@
         return;
       }
 
-      // 3 — OCR (initialise Tesseract for selected language; result reserved)
+      // 3 — OCR (skipped until per-cell arrow detection is implemented)
       setStep(3);
-      await runOCR(captureCanvas, langSelect.value);
+      await yieldUI();
 
       // 4 — Solve
       setStep(4);
