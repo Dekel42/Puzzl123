@@ -283,7 +283,11 @@
   async function startCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width:  { ideal: 3840, min: 640 },
+          height: { ideal: 2160, min: 480 },
+        },
         audio: false,
       });
       video.srcObject = stream;
@@ -379,6 +383,13 @@
     const rowLines = peakMidpoints(rowP, CONFIG.DARK_PROFILE_THRESHOLD, minCell * 0.5);
     const colLines = peakMidpoints(colP, CONFIG.DARK_PROFILE_THRESHOLD, minCell * 0.5);
     if (rowLines.length < CONFIG.MIN_GRID_LINES || colLines.length < CONFIG.MIN_GRID_LINES) return null;
+
+    // Reject if cells aren't roughly square — filters out clue-text columns
+    const avgCellW = (colLines[colLines.length-1] - colLines[0]) / (colLines.length - 1);
+    const avgCellH = (rowLines[rowLines.length-1] - rowLines[0]) / (rowLines.length - 1);
+    const ratio = avgCellW / avgCellH;
+    if (ratio < 0.25 || ratio > 4.0) return null;
+
     return { rowLines, colLines, gray, thresh, W, H };
   }
 
@@ -474,13 +485,19 @@
   // Indexed by answer length for O(1) lookup.
   // ─────────────────────────────────────────────────────────────────────────
 
+  // In Hebrew crosswords final-letter forms are kept as base forms so words can cross.
+  // Normalize ן→נ ם→מ ף→פ ך→כ ץ→צ when indexing and matching.
+  const FINAL_NORM = { 'ן':'נ', 'ם':'מ', 'ף':'פ', 'ך':'כ', 'ץ':'צ' };
+  const normHeb = s => s.replace(/[ןםףךץ]/g, c => FINAL_NORM[c]);
+
   function parseDictionary(json) {
     const index = new Map();
     const data  = JSON.parse(json);
     for (const [clue, val] of Object.entries(data)) {
       const answers = Array.isArray(val) ? val : [val];
-      for (const answer of answers) {
-        const len = [...answer].length;
+      for (const raw of answers) {
+        const answer = normHeb(raw.trim());
+        const len    = [...answer].length;
         if (!index.has(len)) index.set(len, []);
         index.get(len).push({ clue, answer });
       }
@@ -507,15 +524,9 @@
   function solve(slots) {
     return slots.map(slot => {
       const candidates = state.dictIndex?.get(slot.length) ?? [];
-      let label;
-      if (!candidates.length) {
-        label = `${slot.length}${slot.direction === 'across' ? '→' : '↓'}`;
-      } else if (candidates.length === 1) {
-        label = candidates[0].answer;
-      } else {
-        label = `${candidates[0].answer} +${candidates.length - 1}`;
-      }
-      return { slot, answer: label, candidates };
+      // Only show an answer when unambiguous — exactly 1 match for this length
+      const answer = candidates.length === 1 ? candidates[0].answer : null;
+      return { slot, answer, candidates };
     });
   }
 
@@ -579,14 +590,8 @@
     ctx.drawImage(captureCanvas, 0, 0);
 
     for (const { slot, answer } of solutions) {
+      if (!answer) continue;   // ambiguous (multiple matches) — show nothing
       const color = slot.direction === 'across' ? CONFIG.ACROSS_COLOR : CONFIG.DOWN_COLOR;
-
-      // Subtle tint on first cell
-      ctx.fillStyle = slot.direction === 'across'
-        ? 'rgba(22,163,74,0.25)'
-        : 'rgba(37,99,235,0.25)';
-      ctx.fillRect(slot.x + 1, slot.y + 1, slot.cellW - 2, slot.cellH - 2);
-
       drawPill(ctx, answer, slot.x, slot.y, slot.cellW, slot.cellH, color);
     }
   }
