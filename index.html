@@ -212,7 +212,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.8</div>
+  <div id="version">v0.9</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -238,8 +238,11 @@
     MIN_CELL_DIVISOR       : 30,    // MIN_CELL = min(W,H) / this
     MIN_GRID_LINES         : 4,     // fewer than this lines in either axis → error
     CELL_INSET_FRACTION    : 0.15,  // inset % per side when sampling cell color
+    BLOCKED_THRESHOLD      : 0.90,  // >90% dark → blocked (scribbles/shadows can't flip this)
+    CLUE_THRESHOLD         : 0.04,  // >4% dark but not blocked → has printed text/arrow → clue cell
     ACROSS_COLOR           : '#16a34a',
     DOWN_COLOR             : '#2563eb',
+    CLUE_BORDER_COLOR      : '#ff2222',
     TEXT_COLOR             : '#ffffff',
     PILL_PAD_X             : 7,
     PILL_PAD_Y             : 4,
@@ -257,7 +260,7 @@
     { code: 'tur', label: 'Türkçe'  },
   ];
 
-  const STEPS = ['Capture', 'Detect grid', 'Map slots', 'OCR', 'Solve'];
+  const STEPS = ['Capture', 'Detect grid', 'Classify cells', 'Pre-processor', 'Solve'];
   const LS_LANG = 'puzzl_lang';
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -423,65 +426,102 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SLOT EXTRACTION
+  // CELL CLASSIFICATION
+  // Three types:
+  //   'blocked' — >90% dark pixels (solid black square, immune to scribbles/shadows)
+  //   'clue'    — 4–90% dark (has printed text + arrow)
+  //   'answer'  — <4% dark (empty white cell where user writes letters)
   // ─────────────────────────────────────────────────────────────────────────
 
-  // A cell is "open" (white/light) if more than half its interior is above threshold
-  function isCellOpen(gray, W, rowLines, colLines, r, c, thresh) {
+  function sampleCell(gray, W, rowLines, colLines, r, c) {
     const x0 = colLines[c], x1 = colLines[c + 1];
     const y0 = rowLines[r], y1 = rowLines[r + 1];
     const inX = Math.ceil((x1 - x0) * CONFIG.CELL_INSET_FRACTION);
     const inY = Math.ceil((y1 - y0) * CONFIG.CELL_INSET_FRACTION);
-    let light = 0, total = 0;
-    for (let y = y0 + inY; y < y1 - inY; y += 2) {
+    let dark = 0, total = 0;
+    for (let y = y0 + inY; y < y1 - inY; y += 2)
       for (let x = x0 + inX; x < x1 - inX; x += 2) {
-        if (gray[y * W + x] >= thresh) light++;
+        if (gray[y * W + x] < 128) dark++;   // fixed 128 threshold for classification
         total++;
       }
-    }
-    return total > 0 && light / total > 0.5;
+    return total > 0 ? dark / total : 0;
   }
 
-  function buildSlot(dir, startR, startC, len, rowLines, colLines) {
+  function classifyCell(ratio) {
+    if (ratio >= CONFIG.BLOCKED_THRESHOLD) return 'blocked';
+    if (ratio >= CONFIG.CLUE_THRESHOLD)    return 'clue';
+    return 'answer';
+  }
+
+  // Build full 2-D grid of { type, x, y, w, h } objects
+  function buildCellGrid(grid) {
+    const { rowLines, colLines, gray, W } = grid;
+    const rows = rowLines.length - 1;
+    const cols = colLines.length - 1;
+    const cells = [];
+    for (let r = 0; r < rows; r++) {
+      cells[r] = [];
+      for (let c = 0; c < cols; c++) {
+        const ratio = sampleCell(gray, W, rowLines, colLines, r, c);
+        cells[r][c] = {
+          type : classifyCell(ratio),
+          x    : colLines[c],
+          y    : rowLines[r],
+          w    : colLines[c + 1] - colLines[c],
+          h    : rowLines[r + 1] - rowLines[r],
+        };
+      }
+    }
+    return cells;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SLOT EXTRACTION  (answer-cells only — clue cells break a run)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  function buildSlot(dir, startR, startC, len, cellGrid) {
+    const cell = cellGrid[startR][startC];
+    const endCell = dir === 'across'
+      ? cellGrid[startR][startC + len - 1]
+      : cellGrid[startR + len - 1][startC];
     return {
       direction : dir,
       length    : len,
-      x         : colLines[startC],
-      y         : rowLines[startR],
-      cellW     : (colLines[startC + (dir === 'across' ? len : 1)] - colLines[startC]) / (dir === 'across' ? len : 1),
-      cellH     : (rowLines[startR + (dir === 'down'   ? len : 1)] - rowLines[startR]) / (dir === 'down'   ? len : 1),
+      x         : cell.x,
+      y         : cell.y,
+      cellW     : cell.w,
+      cellH     : cell.h,
     };
   }
 
-  function extractSlots(grid) {
-    const { rowLines, colLines, gray, thresh, W } = grid;
-    const rows = rowLines.length - 1;
-    const cols = colLines.length - 1;
+  function extractSlots(cellGrid) {
+    const rows = cellGrid.length;
+    const cols = cellGrid[0].length;
     const slots = [];
 
-    // Across
+    // Across — only runs of 'answer' cells
     for (let r = 0; r < rows; r++) {
       let run = 0, sc = 0;
       for (let c = 0; c <= cols; c++) {
-        if (c < cols && isCellOpen(gray, W, rowLines, colLines, r, c, thresh)) {
+        if (c < cols && cellGrid[r][c].type === 'answer') {
           if (!run) sc = c;
           run++;
         } else {
-          if (run >= 2) slots.push(buildSlot('across', r, sc, run, rowLines, colLines));
+          if (run >= 2) slots.push(buildSlot('across', r, sc, run, cellGrid));
           run = 0;
         }
       }
     }
 
-    // Down
+    // Down — only runs of 'answer' cells
     for (let c = 0; c < cols; c++) {
       let run = 0, sr = 0;
       for (let r = 0; r <= rows; r++) {
-        if (r < rows && isCellOpen(gray, W, rowLines, colLines, r, c, thresh)) {
+        if (r < rows && cellGrid[r][c].type === 'answer') {
           if (!run) sr = r;
           run++;
         } else {
-          if (run >= 2) slots.push(buildSlot('down', sr, c, run, rowLines, colLines));
+          if (run >= 2) slots.push(buildSlot('down', sr, c, run, cellGrid));
           run = 0;
         }
       }
@@ -612,11 +652,32 @@
     ctx.restore();
   }
 
-  function renderSolution(solutions) {
+  // Pre-processor: draw red border on every detected clue cell.
+  // Lets you verify classification before the real solver is wired up.
+  function renderPreprocessor(ctx, cellGrid) {
+    const rows = cellGrid.length, cols = cellGrid[0].length;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cell = cellGrid[r][c];
+        if (cell.type !== 'clue') continue;
+        const lw = Math.max(2, Math.round(Math.min(cell.w, cell.h) * 0.07));
+        ctx.save();
+        ctx.strokeStyle = CONFIG.CLUE_BORDER_COLOR;
+        ctx.lineWidth   = lw;
+        ctx.strokeRect(cell.x + lw / 2, cell.y + lw / 2, cell.w - lw, cell.h - lw);
+        ctx.restore();
+      }
+    }
+  }
+
+  function renderSolution(solutions, cellGrid) {
     solutionCanvas.width  = captureCanvas.width;
     solutionCanvas.height = captureCanvas.height;
     const ctx = solutionCanvas.getContext('2d');
     ctx.drawImage(captureCanvas, 0, 0);
+
+    // Always show the pre-processor overlay so clue-cell detection is visible
+    renderPreprocessor(ctx, cellGrid);
 
     for (const { slot, answer } of solutions) {
       if (!answer) continue;   // ambiguous (multiple matches) — show nothing
@@ -664,26 +725,23 @@
         return;
       }
 
-      // 2 — Map slots
+      // 2 — Classify cells
       setStep(2);
       await yieldUI();
-      const slots = extractSlots(grid);
-      if (!slots.length) {
-        showError('Grid detected but no word slots found. Try a clearer photo.');
-        return;
-      }
+      const cellGrid = buildCellGrid(grid);
 
-      // 3 — OCR (skipped until per-cell arrow detection is implemented)
+      // 3 — Pre-processor (red borders on clue cells; arrow OCR is next milestone)
       setStep(3);
       await yieldUI();
+      const slots = extractSlots(cellGrid);
 
       // 4 — Solve
       setStep(4);
       await yieldUI();
       const solutions = solve(slots);
 
-      // Render & show
-      renderSolution(solutions);
+      // Render & show (pre-processor overlay + answer pills)
+      renderSolution(solutions, cellGrid);
       state.hasSolution    = true;
       state.inSolutionMode = true;
       processingOverlay.style.display = 'none';
