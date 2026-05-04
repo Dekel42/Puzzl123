@@ -162,6 +162,17 @@
       transition: transform 0.1s;
     }
     #toggle-btn:active { transform: scale(0.95); }
+
+    /* ── Version stamp ── */
+    #version {
+      position: fixed;
+      bottom: 8px; left: 12px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.35);
+      z-index: 300;
+      pointer-events: none;
+      font-family: monospace;
+    }
   </style>
 </head>
 <body>
@@ -200,6 +211,8 @@
   <div id="bottom-bar">
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
+
+  <div id="version">v0.7</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -296,7 +309,23 @@
     }
   }
 
-  function captureFrame() {
+  async function captureFrame() {
+    // Prefer ImageCapture.takePhoto() — captures at full sensor resolution
+    // (e.g. 12–48 MP on modern Android) rather than the video stream cap (~1080p)
+    if (window.ImageCapture && video.srcObject) {
+      try {
+        const track   = video.srcObject.getVideoTracks()[0];
+        const capture = new ImageCapture(track);
+        const blob    = await capture.takePhoto();
+        const bitmap  = await createImageBitmap(blob);
+        captureCanvas.width  = bitmap.width;
+        captureCanvas.height = bitmap.height;
+        captureCanvas.getContext('2d').drawImage(bitmap, 0, 0);
+        bitmap.close();
+        return;
+      } catch (_) { /* fall through */ }
+    }
+    // Fallback: grab current video frame
     captureCanvas.width  = video.videoWidth  || 640;
     captureCanvas.height = video.videoHeight || 480;
     captureCanvas.getContext('2d').drawImage(video, 0, 0);
@@ -624,7 +653,7 @@
     try {
       // 0 — Capture
       setStep(0);
-      captureFrame();
+      await captureFrame();
 
       // 1 — Detect grid
       setStep(1);
