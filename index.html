@@ -474,17 +474,13 @@
   // Indexed by answer length for O(1) lookup.
   // ─────────────────────────────────────────────────────────────────────────
 
-  function parseDictionary(text) {
+  function parseDictionary(json) {
     const index = new Map();
-    for (const raw of text.split('\n')) {
-      const line = raw.trim();
-      if (!line) continue;
-      const sep = line.indexOf(' - ');
-      if (sep === -1) continue;
-      const clue   = line.slice(0, sep).trim();
-      const answers = line.slice(sep + 3).split(',').map(a => a.trim()).filter(Boolean);
+    const data  = JSON.parse(json);
+    for (const [clue, val] of Object.entries(data)) {
+      const answers = Array.isArray(val) ? val : [val];
       for (const answer of answers) {
-        const len = [...answer].length;   // spread handles any multi-codepoint chars
+        const len = [...answer].length;
         if (!index.has(len)) index.set(len, []);
         index.get(len).push({ clue, answer });
       }
@@ -494,7 +490,7 @@
 
   async function loadDictionary() {
     try {
-      const res = await fetch('./dict.txt');
+      const res = await fetch('./dict.json');
       if (!res.ok) return;
       state.dictIndex = parseDictionary(await res.text());
     } catch (e) {
