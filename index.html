@@ -212,7 +212,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.11</div>
+  <div id="version">v0.12</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -260,9 +260,9 @@
     { code: 'tur', label: 'Türkçe'  },
   ];
 
-  const STEPS = ['Capture', 'Detect grid', 'Classify cells', 'Pre-processor', 'Solve', 'Online lookup'];
+  const STEPS = ['Capture', 'Detect grid', 'Classify cells', 'AI analysis', 'Place answers'];
 
-  const PITARON_URL = 'https://us-central1-puzzl123.cloudfunctions.net/solvePitaron';
+  const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
   const LS_LANG = 'puzzl_lang';
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -483,12 +483,11 @@
 
   function buildSlot(dir, startR, startC, len, cellGrid) {
     const cell = cellGrid[startR][startC];
-    const endCell = dir === 'across'
-      ? cellGrid[startR][startC + len - 1]
-      : cellGrid[startR + len - 1][startC];
     return {
       direction : dir,
       length    : len,
+      startR    : startR,
+      startC    : startC,
       x         : cell.x,
       y         : cell.y,
       cellW     : cell.w,
@@ -587,37 +586,77 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // SOLVER
-  // Pass 1 (local dict): length-only match against dict.json.
-  // Pass 2 (online):     calls pitaronfree Cloud Function when slot.clue is
-  //                      available (populated by clue-cell OCR, next milestone).
-  // Sends length (integer) only — no partial letters, ever.
+  // AI SOLVER  (Gemini Vision via Cloud Function)
+  // For each suspected clue cell:
+  //   1. Crop it from the capture canvas
+  //   2. Send to analyzeCell (Gemini Vision) → is it really a clue? what does it say? solve it.
+  //   3. False positives get reclassified as 'answer'; confirmed cells yield answers for slots.
   // ─────────────────────────────────────────────────────────────────────────
-  function solveLocal(slots) {
-    return slots.map(slot => {
-      const candidates = state.dictIndex?.get(slot.length) ?? [];
-      const answer     = candidates.length === 1 ? candidates[0].answer : null;
-      return { slot, answer, candidates };
-    });
+
+  function cropCellBase64(cell) {
+    const tmp = document.createElement('canvas');
+    tmp.width  = cell.w;
+    tmp.height = cell.h;
+    tmp.getContext('2d').drawImage(captureCanvas, cell.x, cell.y, cell.w, cell.h, 0, 0, cell.w, cell.h);
+    return tmp.toDataURL('image/jpeg', 0.85).split(',')[1];
   }
 
-  async function solveOnline(localResults) {
-    const tasks = localResults.map(async result => {
-      // Online lookup requires clue text from clue-cell OCR (next milestone)
-      if (result.answer || !result.slot.clue) return result;
+  // Returns Map<'r,c', {rightSlot, downSlot}> pairing each clue cell to adjacent slots
+  function buildClueMap(slots, cellGrid) {
+    const rows = cellGrid.length, cols = cellGrid[0].length;
+    const map  = new Map();
+    for (const slot of slots) {
+      const { startR, startC, direction } = slot;
+      const clueR = direction === 'across' ? startR      : startR - 1;
+      const clueC = direction === 'across' ? startC - 1  : startC;
+      if (clueR < 0 || clueC < 0 || clueR >= rows || clueC >= cols) continue;
+      if (cellGrid[clueR][clueC].type !== 'clue') continue;
+      const key = `${clueR},${clueC}`;
+      if (!map.has(key)) map.set(key, { r: clueR, c: clueC, rightSlot: null, downSlot: null });
+      const entry = map.get(key);
+      if (direction === 'across') entry.rightSlot = slot;
+      else                        entry.downSlot  = slot;
+    }
+    return map;
+  }
+
+  async function analyzeCluesWithAI(cellGrid, slots) {
+    const clueMap = buildClueMap(slots, cellGrid);
+    if (clueMap.size === 0) return slots.map(slot => ({ slot, answer: null }));
+
+    // Fire all analyzeCell requests in parallel
+    const tasks = [...clueMap.values()].map(async entry => {
+      const cell        = cellGrid[entry.r][entry.c];
+      const imageBase64 = cropCellBase64(cell);
+      const rightLength = entry.rightSlot?.length ?? 0;
+      const downLength  = entry.downSlot?.length  ?? 0;
       try {
-        const resp = await fetch(PITARON_URL, {
+        const resp = await fetch(ANALYZE_CELL_URL, {
           method : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body   : JSON.stringify({ clue: result.slot.clue, length: result.slot.length }),
+          body   : JSON.stringify({ imageBase64, rightLength, downLength }),
         });
-        if (!resp.ok) return result;
-        const { answers } = await resp.json();
-        if (answers.length === 1) return { ...result, answer: answers[0], source: 'pitaronfree' };
-      } catch (_) {}
-      return result;
+        const data = await resp.json();
+        return { entry, data };
+      } catch (_) {
+        return { entry, data: { isClue: false } };
+      }
     });
-    return Promise.all(tasks);
+
+    const results = await Promise.all(tasks);
+
+    // Apply results: reclassify false positives, collect answers
+    const slotAnswers = new Map();
+    for (const { entry, data } of results) {
+      if (!data.isClue) {
+        cellGrid[entry.r][entry.c].type = 'answer';  // fix false positive
+        continue;
+      }
+      if (entry.rightSlot && data.rightAnswer) slotAnswers.set(entry.rightSlot, data.rightAnswer);
+      if (entry.downSlot  && data.downAnswer)  slotAnswers.set(entry.downSlot,  data.downAnswer);
+    }
+
+    return slots.map(slot => ({ slot, answer: slotAnswers.get(slot) ?? null }));
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -751,22 +790,17 @@
       await yieldUI();
       const cellGrid = buildCellGrid(grid);
 
-      // 3 — Pre-processor (red borders on clue cells; arrow OCR is next milestone)
+      // 3 — AI analysis: validate clue cells + solve via Gemini Vision
       setStep(3);
       await yieldUI();
-      const slots = extractSlots(cellGrid);
+      const slots    = extractSlots(cellGrid);
+      const solutions = await analyzeCluesWithAI(cellGrid, slots);
 
-      // 4 — Solve (local dictionary)
+      // 4 — Place answers
       setStep(4);
       await yieldUI();
-      const localSolutions = solveLocal(slots);
 
-      // 5 — Online lookup (pitaronfree; activates when clue OCR is wired up)
-      setStep(5);
-      await yieldUI();
-      const solutions = await solveOnline(localSolutions);
-
-      // Render & show (pre-processor overlay + answer pills)
+      // Render & show
       renderSolution(solutions, cellGrid);
       state.hasSolution    = true;
       state.inSolutionMode = true;
