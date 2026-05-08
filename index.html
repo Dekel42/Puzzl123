@@ -212,7 +212,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.10</div>
+  <div id="version">v0.11</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -260,7 +260,9 @@
     { code: 'tur', label: 'Türkçe'  },
   ];
 
-  const STEPS = ['Capture', 'Detect grid', 'Classify cells', 'Pre-processor', 'Solve'];
+  const STEPS = ['Capture', 'Detect grid', 'Classify cells', 'Pre-processor', 'Solve', 'Online lookup'];
+
+  const PITARON_URL = 'https://us-central1-puzzl123.cloudfunctions.net/solvePitaron';
   const LS_LANG = 'puzzl_lang';
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -586,17 +588,36 @@
 
   // ─────────────────────────────────────────────────────────────────────────
   // SOLVER
-  // Looks up slot.length in dictionary. Falls back to numeric label if no match.
+  // Pass 1 (local dict): length-only match against dict.json.
+  // Pass 2 (online):     calls pitaronfree Cloud Function when slot.clue is
+  //                      available (populated by clue-cell OCR, next milestone).
   // Sends length (integer) only — no partial letters, ever.
-  // TODO: add Cloud Function → pitaronfree as secondary fallback
   // ─────────────────────────────────────────────────────────────────────────
-  function solve(slots) {
+  function solveLocal(slots) {
     return slots.map(slot => {
       const candidates = state.dictIndex?.get(slot.length) ?? [];
-      // Only show an answer when unambiguous — exactly 1 match for this length
-      const answer = candidates.length === 1 ? candidates[0].answer : null;
+      const answer     = candidates.length === 1 ? candidates[0].answer : null;
       return { slot, answer, candidates };
     });
+  }
+
+  async function solveOnline(localResults) {
+    const tasks = localResults.map(async result => {
+      // Online lookup requires clue text from clue-cell OCR (next milestone)
+      if (result.answer || !result.slot.clue) return result;
+      try {
+        const resp = await fetch(PITARON_URL, {
+          method : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body   : JSON.stringify({ clue: result.slot.clue, length: result.slot.length }),
+        });
+        if (!resp.ok) return result;
+        const { answers } = await resp.json();
+        if (answers.length === 1) return { ...result, answer: answers[0], source: 'pitaronfree' };
+      } catch (_) {}
+      return result;
+    });
+    return Promise.all(tasks);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -735,10 +756,15 @@
       await yieldUI();
       const slots = extractSlots(cellGrid);
 
-      // 4 — Solve
+      // 4 — Solve (local dictionary)
       setStep(4);
       await yieldUI();
-      const solutions = solve(slots);
+      const localSolutions = solveLocal(slots);
+
+      // 5 — Online lookup (pitaronfree; activates when clue OCR is wired up)
+      setStep(5);
+      await yieldUI();
+      const solutions = await solveOnline(localSolutions);
 
       // Render & show (pre-processor overlay + answer pills)
       renderSolution(solutions, cellGrid);

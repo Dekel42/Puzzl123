@@ -1,4 +1,7 @@
 {
+  "functions": {
+    "source": "functions"
+  },
   "hosting": {
     "public": ".",
     "ignore": [
@@ -10,7 +13,8 @@
       ".git/**",
       ".firebase/**",
       ".claude/**",
-      "node_modules/**"
+      "node_modules/**",
+      "functions/**"
     ],
     "rewrites": [
       { "source": "**", "destination": "/index.html" }
