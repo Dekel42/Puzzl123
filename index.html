@@ -241,7 +241,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.14</div>
+  <div id="version">v0.15</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -278,7 +278,8 @@
     'down-right': '↘', 'right-down': '↘',
   };
 
-  const MAX_BLOBS = 12;
+  const MAX_BLOBS   = 6;    // free-tier: 15 RPM → keep calls low
+  const MIN_GAP_MS  = 4500; // enforce ≥4.5 s between request *starts* (<13 RPM)
 
   const LANGUAGES = [
     { code: 'heb', label: 'עברית'   },
@@ -539,25 +540,42 @@
     return tmp.toDataURL('image/jpeg', 0.85).split(',')[1];
   }
 
-  async function analyzeCluesWithAI(blobs) {
-    // Take the largest blobs first — they're most likely to be real clue cells
+  // onResult(result) is called immediately when each blob finishes — enables live card reveal.
+  // Sequential + MIN_GAP_MS enforced to stay under the free-tier rate limit.
+  async function analyzeCluesWithAI(blobs, onResult) {
     const topBlobs = [...blobs]
       .sort((a, b) => b.w * b.h - a.w * a.h)
       .slice(0, MAX_BLOBS);
 
-    return Promise.all(topBlobs.map(async (blob, i) => {
+    const allResults = [];
+    let lastStart = 0;
+
+    for (let i = 0; i < topBlobs.length; i++) {
+      const blob  = topBlobs[i];
       const color = BLOB_COLORS[i % BLOB_COLORS.length];
+
+      // Respect rate limit: wait until MIN_GAP_MS after the previous request started
+      const wait = MIN_GAP_MS - (Date.now() - lastStart);
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      lastStart = Date.now();
+
+      let result;
       try {
         const resp = await fetch(ANALYZE_CELL_URL, {
           method : 'POST',
           headers: { 'Content-Type': 'application/json' },
           body   : JSON.stringify({ imageBase64: cropBlobBase64(blob), rightLength: 0, downLength: 0 }),
         });
-        return { blob, data: await resp.json(), color };
+        result = { blob, data: await resp.json(), color };
       } catch (_) {
-        return { blob, data: { isClue: false }, color };
+        result = { blob, data: { isClue: false }, color };
       }
-    }));
+
+      allResults.push(result);
+      onResult(result, i, topBlobs.length);
+    }
+
+    return allResults;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -587,10 +605,10 @@
     }
   }
 
-  function makeCard(clueText, answer, dirArrow, color, index) {
+  function makeCard(clueText, answer, dirArrow, color) {
     const card = document.createElement('div');
     card.className = 'answer-card';
-    card.style.cssText = `--c:${color}; animation-delay:${index * 110}ms`;
+    card.style.cssText = `--c:${color}`;
     const clue = clueText || '—';
     card.innerHTML =
       `<div class="card-meta"><div class="card-dot"></div><span class="card-dir">${dirArrow}</span></div>` +
@@ -599,26 +617,21 @@
     return card;
   }
 
-  function buildCards(allResults) {
-    resultsList.innerHTML = '';
-    let cardIndex = 0;
+  function appendResult({ data, color }) {
+    if (!data.isClue) return;
+    const dir    = data.arrowDirection || '';
+    const arrow  = DIR_ARROW[dir] || '→';
+    const hasH   = data.horizAnswer && data.horizAnswer.length > 0;
+    const hasD   = data.downAnswer  && data.downAnswer.length  > 0;
+    if (hasH) resultsList.appendChild(makeCard(data.clueText, data.horizAnswer, arrow,           color));
+    if (hasD) resultsList.appendChild(makeCard(data.clueText, data.downAnswer,  DIR_ARROW.down,  color));
+  }
 
-    for (const { data, color } of allResults) {
-      if (!data.isClue) continue;
-      const dir    = data.arrowDirection || '';
-      const arrow  = DIR_ARROW[dir] || '→';
-      const dArrow = DIR_ARROW['down'] || '↓';
-      const hasH   = data.horizAnswer && data.horizAnswer.length > 0;
-      const hasD   = data.downAnswer  && data.downAnswer.length  > 0;
-
-      if (hasH) resultsList.appendChild(makeCard(data.clueText, data.horizAnswer, arrow,  color, cardIndex++));
-      if (hasD) resultsList.appendChild(makeCard(data.clueText, data.downAnswer,  dArrow, color, cardIndex++));
-    }
-
-    if (cardIndex === 0) {
+  function showNoResults() {
+    if (resultsList.children.length === 0) {
       const p = document.createElement('p');
       p.className   = 'no-results';
-      p.textContent = 'No clues solved.\nMake sure clue cells are clearly visible and well-lit.';
+      p.textContent = 'No clues solved. Make sure clue cells are clearly visible and well-lit.';
       resultsList.appendChild(p);
     }
   }
@@ -667,28 +680,34 @@
         return;
       }
 
-      // 2 — Preview
+      // 2 — Draw photo with faint outlines on all blobs, show results screen early
       setStep(2);
       await yieldUI();
+      const topBlobs = [...blobs].sort((a,b) => b.w*b.h - a.w*a.h).slice(0, MAX_BLOBS);
+      const placeholder = topBlobs.map((blob, i) => ({ blob, data: { isClue: false }, color: BLOB_COLORS[i % BLOB_COLORS.length] }));
+      renderPhoto(placeholder);
+      resultsList.innerHTML = '';
 
-      // 3 — AI: identify clues + solve
-      setStep(3);
-      await yieldUI();
-      const allResults = await analyzeCluesWithAI(blobs);
-
-      // 4 — Build results
-      setStep(4);
-      await yieldUI();
-
-      renderPhoto(allResults);
-      buildCards(allResults);
-
-      state.hasSolution    = true;
-      state.inSolutionMode = true;
+      // Transition to results view while AI runs in the background
       processingOverlay.style.display = 'none';
       solutionView.style.display      = 'flex';
       bottomBar.style.display         = 'flex';
       toggleBtn.textContent           = '📷 Back to Camera';
+      state.hasSolution    = true;
+      state.inSolutionMode = true;
+
+      // 3 — AI: sequential, one blob at a time, cards appear live
+      const liveResults = [...placeholder]; // mutated as results arrive
+      const allResults = await analyzeCluesWithAI(blobs, (result, i, total) => {
+        stepLabel.textContent = `Solving ${i + 1} / ${total}…`;
+        liveResults[i] = result;
+        renderPhoto(liveResults);
+        appendResult(result);
+      });
+
+      // Final redraw + empty-state guard
+      renderPhoto(allResults);
+      showNoResults();
 
     } catch (err) {
       showError('Processing failed: ' + err.message);
