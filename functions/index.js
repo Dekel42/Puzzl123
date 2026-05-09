@@ -53,7 +53,7 @@ Respond with ONLY valid JSON, no markdown:
     try {
       const genAI = new GoogleGenerativeAI(geminiKey.value());
       const model = genAI.getGenerativeModel({
-        model            : 'gemini-2.0-flash-lite',
+        model            : 'gemini-2.0-flash-001',
         generationConfig : { temperature: 0.1, maxOutputTokens: 300 },
       });
 
