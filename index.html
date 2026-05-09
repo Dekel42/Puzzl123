@@ -241,7 +241,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.15</div>
+  <div id="version">v0.16</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -294,7 +294,31 @@
 
   const STEPS = ['Capture', 'Find clue cells', 'Preview blobs', 'AI analysis', 'Place answers'];
 
-  const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
+  // API key must be from a project WITHOUT billing (free tier: 15 RPM / 1500 RPD).
+  // Restrict key to puzzl123.web.app in aistudio.google.com → API keys → Edit.
+  const GEMINI_API_KEY = 'AIzaSyDObuZ743nOGZr2UPaamLbpOPE_va0LCsI';
+  const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+  const GEMINI_PROMPT = `You are analyzing a cropped cell from a crossword puzzle photo.
+
+A CLUE cell contains printed text (a definition, typically 2+ words) and a small arrow pointing
+toward the empty answer cells. Hebrew puzzles use left arrows and down arrows. English use right and down.
+An ANSWER cell is blank or has only a single handwritten letter/digit — it is NOT a clue cell.
+
+If this IS a clue cell:
+1. Read the printed text exactly (ignore the arrow symbol itself).
+2. Identify ALL arrow directions present: any of "left","right","down","down-left","left-down","down-right","right-down".
+3. Solve the clue for each direction. Give a concise crossword answer (typically 2–8 letters).
+
+Respond with ONLY valid JSON, no markdown:
+{
+  "isClue": true | false,
+  "clueText": "clue text or null",
+  "arrowDirection": "left"|"right"|"down"|"down-left"|"left-down"|"down-right"|"right-down"|null,
+  "horizAnswer": "answer for horizontal direction or null",
+  "downAnswer":  "answer for down direction or null"
+}`;
+
   const LS_LANG = 'puzzl_lang';
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -529,7 +553,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // AI SOLVER  (Gemini Vision via Cloud Function)
+  // AI SOLVER  (Gemini Vision — browser-direct, no Cloud Function)
   // Single round per blob: is it a clue? read it. solve it.
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -540,13 +564,35 @@
     return tmp.toDataURL('image/jpeg', 0.85).split(',')[1];
   }
 
-  // onResult(result) is called immediately when each blob finishes — enables live card reveal.
-  // Sequential + MIN_GAP_MS enforced to stay under the free-tier rate limit.
-  async function analyzeCluesWithAI(blobs, onResult) {
-    const topBlobs = [...blobs]
-      .sort((a, b) => b.w * b.h - a.w * a.h)
-      .slice(0, MAX_BLOBS);
+  async function callGeminiVision(imageBase64) {
+    const resp = await fetch(GEMINI_URL, {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify({
+        contents: [{ role: 'user', parts: [
+          { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
+          { text: GEMINI_PROMPT },
+        ]}],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 300 },
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error?.message || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    const raw    = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+    const json   = raw.replace(/```(?:json)?\n?|\n?```/g, '').trim();
+    const parsed = JSON.parse(json);
+    if (parsed.horizAnswer) parsed.horizAnswer = normHeb(parsed.horizAnswer);
+    if (parsed.downAnswer)  parsed.downAnswer  = normHeb(parsed.downAnswer);
+    return parsed;
+  }
 
+  // Sequential with MIN_GAP_MS between request starts to stay under 15 RPM.
+  // onResult fires after each blob so the UI can update live.
+  async function analyzeCluesWithAI(blobs, onResult) {
+    const topBlobs = [...blobs].sort((a,b) => b.w*b.h - a.w*a.h).slice(0, MAX_BLOBS);
     const allResults = [];
     let lastStart = 0;
 
@@ -554,21 +600,17 @@
       const blob  = topBlobs[i];
       const color = BLOB_COLORS[i % BLOB_COLORS.length];
 
-      // Respect rate limit: wait until MIN_GAP_MS after the previous request started
       const wait = MIN_GAP_MS - (Date.now() - lastStart);
       if (wait > 0) await new Promise(r => setTimeout(r, wait));
       lastStart = Date.now();
 
       let result;
       try {
-        const resp = await fetch(ANALYZE_CELL_URL, {
-          method : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body   : JSON.stringify({ imageBase64: cropBlobBase64(blob), rightLength: 0, downLength: 0 }),
-        });
-        result = { blob, data: await resp.json(), color };
-      } catch (_) {
-        result = { blob, data: { isClue: false }, color };
+        const data = await callGeminiVision(cropBlobBase64(blob));
+        result = { blob, data, color };
+      } catch (e) {
+        console.warn('Gemini blob', i, e.message);
+        result = { blob, data: { isClue: false, _err: e.message }, color };
       }
 
       allResults.push(result);
