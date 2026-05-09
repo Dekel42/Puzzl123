@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Crossword Solver</title>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -212,7 +211,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.12</div>
+  <div id="version">v0.13</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -260,7 +259,7 @@
     { code: 'tur', label: 'Türkçe'  },
   ];
 
-  const STEPS = ['Capture', 'Detect grid', 'Classify cells', 'AI analysis', 'Place answers'];
+  const STEPS = ['Capture', 'Find clue cells', 'Preview blobs', 'AI analysis', 'Place answers'];
 
   const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
   const LS_LANG = 'puzzl_lang';
@@ -290,8 +289,6 @@
   const state = {
     hasSolution    : false,
     inSolutionMode : false,
-    worker         : null,
-    workerLang     : null,
     dictIndex      : null,   // Map<length, Array<{clue, answer}>>
   };
 
@@ -337,10 +334,10 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // GRID DETECTION
+  // BLOB DETECTION  (replaces grid detection + cell classification + slot extraction)
+  // Finds text-density regions directly from the image — no grid lines needed.
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Extract luminance-weighted grayscale from RGBA ImageData buffer
   function toGray(data, size) {
     const g = new Uint8Array(size);
     for (let i = 0; i < size; i++)
@@ -348,7 +345,6 @@
     return g;
   }
 
-  // Otsu's global threshold — maximises between-class variance
   function otsu(gray) {
     const hist = new Int32Array(256);
     for (const v of gray) hist[v]++;
@@ -366,187 +362,100 @@
       const v = wB * wF * (mB - mF) ** 2;
       if (v > maxVar) { maxVar = v; thresh = t; }
     }
-    // Fall back to 128 if image is very low-contrast
     return (thresh > 30 && thresh < 220) ? thresh : 128;
   }
 
-  // Fraction of pixels below threshold for each row and column
-  function buildProfiles(gray, W, H, thresh) {
-    const rowP = new Float32Array(H);
-    const colP = new Float32Array(W);
-    for (let y = 0; y < H; y++) {
-      let d = 0;
-      for (let x = 0; x < W; x++) if (gray[y*W + x] < thresh) d++;
-      rowP[y] = d / W;
-    }
-    for (let x = 0; x < W; x++) {
-      let d = 0;
-      for (let y = 0; y < H; y++) if (gray[y*W + x] < thresh) d++;
-      colP[x] = d / H;
-    }
-    return { rowP, colP };
-  }
+  // Find connected regions whose pixel darkness is in the "text" range (20%–82%).
+  // A solid black cell is >82%; an empty white cell is <20%; printed text sits between.
+  function findTextBlobs(gray, W, H, thresh) {
+    const BLOCK = Math.max(12, Math.floor(Math.min(W, H) / 45));
+    const bW = Math.ceil(W / BLOCK), bH = Math.ceil(H / BLOCK);
 
-  // Find contiguous runs above threshold; return their midpoints, enforcing minGap
-  function peakMidpoints(profile, threshold, minGap) {
-    const out = [];
-    let in_ = false, start = 0;
-    for (let i = 0; i <= profile.length; i++) {
-      const v = i < profile.length ? profile[i] : 0;
-      if (v >= threshold && !in_) { in_ = true; start = i; }
-      else if (v < threshold && in_) {
-        in_ = false;
-        const mid = (start + i - 1) >> 1;
-        if (!out.length || mid - out[out.length - 1] >= minGap) out.push(mid);
+    const map = new Float32Array(bW * bH);
+    for (let by = 0; by < bH; by++)
+      for (let bx = 0; bx < bW; bx++) {
+        let dark = 0, total = 0;
+        for (let y = by*BLOCK; y < Math.min((by+1)*BLOCK, H); y += 2)
+          for (let x = bx*BLOCK; x < Math.min((bx+1)*BLOCK, W); x += 2) {
+            if (gray[y*W+x] < thresh) dark++;
+            total++;
+          }
+        map[by*bW+bx] = total ? dark/total : 0;
+      }
+
+    const TEXT_MIN = 0.20, TEXT_MAX = 0.82, MIN_BLOCKS = 6;
+    const visited = new Uint8Array(bW * bH);
+    const blobs = [];
+
+    for (let by = 0; by < bH; by++) {
+      for (let bx = 0; bx < bW; bx++) {
+        const idx = by*bW + bx;
+        if (visited[idx] || map[idx] < TEXT_MIN || map[idx] > TEXT_MAX) continue;
+
+        const cells = [], queue = [idx];
+        visited[idx] = 1;
+        while (queue.length) {
+          const cur = queue.pop();
+          cells.push(cur);
+          const cx = cur % bW, cy = (cur / bW) | 0;
+          for (const [dx, dy] of [[-1,0],[1,0],[0,-1],[0,1]]) {
+            const nx = cx+dx, ny = cy+dy;
+            if (nx<0||nx>=bW||ny<0||ny>=bH) continue;
+            const ni = ny*bW+nx;
+            if (visited[ni] || map[ni]<TEXT_MIN || map[ni]>TEXT_MAX) continue;
+            visited[ni] = 1;
+            queue.push(ni);
+          }
+        }
+        if (cells.length < MIN_BLOCKS) continue;
+
+        let x0=W, x1=0, y0=H, y1=0;
+        for (const i of cells) {
+          const bx2=i%bW, by2=(i/bW)|0;
+          x0=Math.min(x0,bx2*BLOCK);   x1=Math.max(x1,Math.min((bx2+1)*BLOCK,W));
+          y0=Math.min(y0,by2*BLOCK);   y1=Math.max(y1,Math.min((by2+1)*BLOCK,H));
+        }
+        blobs.push({ x:x0, y:y0, w:x1-x0, h:y1-y0 });
       }
     }
-    return out;
+    return blobs;
   }
 
-  /**
-   * Detect crossword grid lines in the captured canvas.
-   * @returns {{ rowLines, colLines, thresh, W, H } | null}
-   */
-  function detectGrid(canvas) {
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height;
-    const gray = toGray(ctx.getImageData(0, 0, W, H).data, W * H);
-    const thresh = otsu(gray);
-    const minCell = Math.floor(Math.min(W, H) / CONFIG.MIN_CELL_DIVISOR);
-    const { rowP, colP } = buildProfiles(gray, W, H, thresh);
-    const rowLines = peakMidpoints(rowP, CONFIG.DARK_PROFILE_THRESHOLD, minCell * 0.5);
-    const colLines = peakMidpoints(colP, CONFIG.DARK_PROFILE_THRESHOLD, minCell * 0.5);
-    if (rowLines.length < CONFIG.MIN_GRID_LINES || colLines.length < CONFIG.MIN_GRID_LINES) return null;
-
-    // Reject if cells aren't roughly square — filters out clue-text columns
-    const avgCellW = (colLines[colLines.length-1] - colLines[0]) / (colLines.length - 1);
-    const avgCellH = (rowLines[rowLines.length-1] - rowLines[0]) / (rowLines.length - 1);
-    const ratio = avgCellW / avgCellH;
-    if (ratio < 0.25 || ratio > 4.0) return null;
-
-    return { rowLines, colLines, gray, thresh, W, H };
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // CELL CLASSIFICATION
-  // Three types:
-  //   'blocked' — >90% dark pixels (solid black square, immune to scribbles/shadows)
-  //   'clue'    — 4–90% dark (has printed text + arrow)
-  //   'answer'  — <4% dark (empty white cell where user writes letters)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  function sampleCell(gray, W, rowLines, colLines, r, c) {
-    const x0 = colLines[c], x1 = colLines[c + 1];
-    const y0 = rowLines[r], y1 = rowLines[r + 1];
-    const inX = Math.ceil((x1 - x0) * CONFIG.CELL_INSET_FRACTION);
-    const inY = Math.ceil((y1 - y0) * CONFIG.CELL_INSET_FRACTION);
-    let dark = 0, total = 0;
-    for (let y = y0 + inY; y < y1 - inY; y += 2)
-      for (let x = x0 + inX; x < x1 - inX; x += 2) {
-        if (gray[y * W + x] < 128) dark++;   // fixed 128 threshold for classification
+  // Average darkness of a pixel rectangle in the grayscale buffer
+  function sampleRegion(gray, W, x, y, w, h) {
+    const H2 = (gray.length / W) | 0;
+    const x0=Math.max(0,x|0), x1=Math.min(W,(x+w)|0);
+    const y0=Math.max(0,y|0), y1=Math.min(H2,(y+h)|0);
+    if (x0>=x1||y0>=y1) return 0;
+    let dark=0, total=0;
+    for (let py=y0; py<y1; py+=2)
+      for (let px=x0; px<x1; px+=2) {
+        if (gray[py*W+px] < 128) dark++;
         total++;
       }
-    return total > 0 ? dark / total : 0;
+    return total ? dark/total : 0;
   }
 
-  function classifyCell(ratio) {
-    if (ratio >= CONFIG.BLOCKED_THRESHOLD) return 'blocked';
-    if (ratio >= CONFIG.CLUE_THRESHOLD)    return 'clue';
-    return 'answer';
-  }
+  // Walk from a blob in one direction, counting consecutive empty answer cells.
+  // Stops at a solid dark (blocked) region or another text region.
+  // dir: 'left' | 'right' | 'down'
+  function countCells(blob, dir, gray, W, H) {
+    const cW = blob.w, cH = blob.h;
+    let x, y, dx, dy;
+    if      (dir === 'left')  { x = blob.x - cW;    y = blob.y; dx = -cW; dy = 0;  }
+    else if (dir === 'right') { x = blob.x + cW;     y = blob.y; dx =  cW; dy = 0;  }
+    else                      { x = blob.x; y = blob.y + cH;     dx =  0;  dy = cH; }
 
-  // Build full 2-D grid of { type, x, y, w, h } objects
-  function buildCellGrid(grid) {
-    const { rowLines, colLines, gray, W } = grid;
-    const rows = rowLines.length - 1;
-    const cols = colLines.length - 1;
-    const cells = [];
-    for (let r = 0; r < rows; r++) {
-      cells[r] = [];
-      for (let c = 0; c < cols; c++) {
-        const ratio = sampleCell(gray, W, rowLines, colLines, r, c);
-        cells[r][c] = {
-          type : classifyCell(ratio),
-          x    : colLines[c],
-          y    : rowLines[r],
-          w    : colLines[c + 1] - colLines[c],
-          h    : rowLines[r + 1] - rowLines[r],
-        };
-      }
+    let count = 0;
+    for (let step = 0; step < 25; step++) {
+      if (x+cW > W+5 || y+cH > H+5 || x < -5 || y < -5) break;
+      const ratio = sampleRegion(gray, W, x, y, cW, cH);
+      if   (ratio > 0.70) break;   // solid dark → blocked → end of slot
+      if   (ratio < 0.32) count++; // empty answer cell
+      else                break;   // another clue cell → stop
+      x += dx; y += dy;
     }
-    return cells;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // SLOT EXTRACTION  (answer-cells only — clue cells break a run)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  function buildSlot(dir, startR, startC, len, cellGrid) {
-    const cell = cellGrid[startR][startC];
-    return {
-      direction : dir,
-      length    : len,
-      startR    : startR,
-      startC    : startC,
-      x         : cell.x,
-      y         : cell.y,
-      cellW     : cell.w,
-      cellH     : cell.h,
-    };
-  }
-
-  function extractSlots(cellGrid) {
-    const rows = cellGrid.length;
-    const cols = cellGrid[0].length;
-    const slots = [];
-
-    // Across — only runs of 'answer' cells
-    for (let r = 0; r < rows; r++) {
-      let run = 0, sc = 0;
-      for (let c = 0; c <= cols; c++) {
-        if (c < cols && cellGrid[r][c].type === 'answer') {
-          if (!run) sc = c;
-          run++;
-        } else {
-          if (run >= 2) slots.push(buildSlot('across', r, sc, run, cellGrid));
-          run = 0;
-        }
-      }
-    }
-
-    // Down — only runs of 'answer' cells
-    for (let c = 0; c < cols; c++) {
-      let run = 0, sr = 0;
-      for (let r = 0; r <= rows; r++) {
-        if (r < rows && cellGrid[r][c].type === 'answer') {
-          if (!run) sr = r;
-          run++;
-        } else {
-          if (run >= 2) slots.push(buildSlot('down', sr, c, run, cellGrid));
-          run = 0;
-        }
-      }
-    }
-
-    return slots;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // TESSERACT
-  // ─────────────────────────────────────────────────────────────────────────
-
-  async function ensureWorker(lang) {
-    if (state.worker && state.workerLang === lang) return state.worker;
-    if (state.worker) { await state.worker.terminate(); state.worker = null; }
-    state.worker     = await Tesseract.createWorker(lang, 1, { logger: () => {} });
-    state.workerLang = lang;
-    return state.worker;
-  }
-
-  async function runOCR(canvas, lang) {
-    const w = await ensureWorker(lang);
-    await w.recognize(canvas);
-    // Letter content intentionally discarded — only slot length (integer) matters
+    return count;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -587,76 +496,84 @@
 
   // ─────────────────────────────────────────────────────────────────────────
   // AI SOLVER  (Gemini Vision via Cloud Function)
-  // For each suspected clue cell:
-  //   1. Crop it from the capture canvas
-  //   2. Send to analyzeCell (Gemini Vision) → is it really a clue? what does it say? solve it.
-  //   3. False positives get reclassified as 'answer'; confirmed cells yield answers for slots.
+  // For each text blob:
+  //   Round 1: ask Gemini if it's a clue cell and which direction the arrow points.
+  //   Round 2: count cells locally in that direction, then ask Gemini to solve with the length hint.
   // ─────────────────────────────────────────────────────────────────────────
 
-  function cropCellBase64(cell) {
+  function cropBlobBase64(blob) {
     const tmp = document.createElement('canvas');
-    tmp.width  = cell.w;
-    tmp.height = cell.h;
-    tmp.getContext('2d').drawImage(captureCanvas, cell.x, cell.y, cell.w, cell.h, 0, 0, cell.w, cell.h);
+    tmp.width = blob.w; tmp.height = blob.h;
+    tmp.getContext('2d').drawImage(captureCanvas, blob.x, blob.y, blob.w, blob.h, 0, 0, blob.w, blob.h);
     return tmp.toDataURL('image/jpeg', 0.85).split(',')[1];
   }
 
-  // Returns Map<'r,c', {rightSlot, downSlot}> pairing each clue cell to adjacent slots
-  function buildClueMap(slots, cellGrid) {
-    const rows = cellGrid.length, cols = cellGrid[0].length;
-    const map  = new Map();
-    for (const slot of slots) {
-      const { startR, startC, direction } = slot;
-      const clueR = direction === 'across' ? startR      : startR - 1;
-      const clueC = direction === 'across' ? startC - 1  : startC;
-      if (clueR < 0 || clueC < 0 || clueR >= rows || clueC >= cols) continue;
-      if (cellGrid[clueR][clueC].type !== 'clue') continue;
-      const key = `${clueR},${clueC}`;
-      if (!map.has(key)) map.set(key, { r: clueR, c: clueC, rightSlot: null, downSlot: null });
-      const entry = map.get(key);
-      if (direction === 'across') entry.rightSlot = slot;
-      else                        entry.downSlot  = slot;
-    }
-    return map;
-  }
+  async function analyzeCluesWithAI(blobs, gray, W, H) {
+    const solutions = [];
 
-  async function analyzeCluesWithAI(cellGrid, slots) {
-    const clueMap = buildClueMap(slots, cellGrid);
-    if (clueMap.size === 0) return slots.map(slot => ({ slot, answer: null }));
-
-    // Fire all analyzeCell requests in parallel
-    const tasks = [...clueMap.values()].map(async entry => {
-      const cell        = cellGrid[entry.r][entry.c];
-      const imageBase64 = cropCellBase64(cell);
-      const rightLength = entry.rightSlot?.length ?? 0;
-      const downLength  = entry.downSlot?.length  ?? 0;
+    // Round 1 — fire all blobs in parallel, get direction only
+    const round1 = await Promise.all(blobs.map(async blob => {
+      const imageBase64 = cropBlobBase64(blob);
       try {
         const resp = await fetch(ANALYZE_CELL_URL, {
           method : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body   : JSON.stringify({ imageBase64, rightLength, downLength }),
+          body   : JSON.stringify({ imageBase64, rightLength: 0, downLength: 0 }),
         });
-        const data = await resp.json();
-        return { entry, data };
+        return { blob, data: await resp.json() };
       } catch (_) {
-        return { entry, data: { isClue: false } };
+        return { blob, data: { isClue: false } };
       }
-    });
+    }));
 
-    const results = await Promise.all(tasks);
+    // Round 2 — for confirmed clues: count cells, then solve with lengths
+    const round2 = await Promise.all(round1.map(async ({ blob, data }) => {
+      if (!data.isClue || !data.arrowDirection) return null;
+      const dir = data.arrowDirection;
 
-    // Apply results: reclassify false positives, collect answers
-    const slotAnswers = new Map();
-    for (const { entry, data } of results) {
-      if (!data.isClue) {
-        cellGrid[entry.r][entry.c].type = 'answer';  // fix false positive
-        continue;
+      const hasLeft  = dir === 'left'  || dir === 'down-left'  || dir === 'left-down';
+      const hasRight = dir === 'right' || dir === 'down-right' || dir === 'right-down';
+      const hasDown  = dir === 'down'  || dir === 'down-left'  || dir === 'left-down'
+                    || dir === 'down-right' || dir === 'right-down';
+
+      const horizDir = hasLeft ? 'left' : (hasRight ? 'right' : null);
+      const horizLen = horizDir ? countCells(blob, horizDir, gray, W, H) : 0;
+      const downLen  = hasDown  ? countCells(blob, 'down',   gray, W, H) : 0;
+
+      if (horizLen === 0 && downLen === 0) return null;
+
+      try {
+        const imageBase64 = cropBlobBase64(blob);
+        const resp = await fetch(ANALYZE_CELL_URL, {
+          method : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body   : JSON.stringify({ imageBase64, rightLength: horizLen, downLength: downLen }),
+        });
+        return { blob, solved: await resp.json(), horizDir, horizLen, downLen };
+      } catch (_) {
+        return null;
       }
-      if (entry.rightSlot && data.rightAnswer) slotAnswers.set(entry.rightSlot, data.rightAnswer);
-      if (entry.downSlot  && data.downAnswer)  slotAnswers.set(entry.downSlot,  data.downAnswer);
+    }));
+
+    for (const r of round2) {
+      if (!r) continue;
+      const { blob, solved, horizDir, horizLen, downLen } = r;
+      if (solved.horizAnswer && horizLen > 0 && horizDir) {
+        const slotX = horizDir === 'left' ? blob.x - horizLen * blob.w : blob.x + blob.w;
+        solutions.push({
+          slot  : { direction: 'horiz', length: horizLen, x: slotX, y: blob.y, cellW: blob.w, cellH: blob.h },
+          answer: solved.horizAnswer,
+        });
+      }
+      if (solved.downAnswer && downLen > 0) {
+        solutions.push({
+          slot  : { direction: 'down', length: downLen, x: blob.x, y: blob.y + blob.h, cellW: blob.w, cellH: blob.h },
+          answer: solved.downAnswer,
+        });
+      }
     }
 
-    return slots.map(slot => ({ slot, answer: slotAnswers.get(slot) ?? null }));
+    return solutions;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -712,36 +629,26 @@
     ctx.restore();
   }
 
-  // Pre-processor: draw red border on every detected clue cell.
-  // Lets you verify classification before the real solver is wired up.
-  function renderPreprocessor(ctx, cellGrid) {
-    const rows = cellGrid.length, cols = cellGrid[0].length;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const cell = cellGrid[r][c];
-        if (cell.type !== 'clue') continue;
-        const lw = Math.max(2, Math.round(Math.min(cell.w, cell.h) * 0.07));
-        ctx.save();
-        ctx.strokeStyle = CONFIG.CLUE_BORDER_COLOR;
-        ctx.lineWidth   = lw;
-        ctx.strokeRect(cell.x + lw / 2, cell.y + lw / 2, cell.w - lw, cell.h - lw);
-        ctx.restore();
-      }
+  function renderPreprocessor(ctx, blobs) {
+    for (const blob of blobs) {
+      const lw = Math.max(2, Math.round(Math.min(blob.w, blob.h) * 0.07));
+      ctx.save();
+      ctx.strokeStyle = CONFIG.CLUE_BORDER_COLOR;
+      ctx.lineWidth   = lw;
+      ctx.strokeRect(blob.x + lw / 2, blob.y + lw / 2, blob.w - lw, blob.h - lw);
+      ctx.restore();
     }
   }
 
-  function renderSolution(solutions, cellGrid) {
+  function renderSolution(solutions, blobs) {
     solutionCanvas.width  = captureCanvas.width;
     solutionCanvas.height = captureCanvas.height;
     const ctx = solutionCanvas.getContext('2d');
     ctx.drawImage(captureCanvas, 0, 0);
-
-    // Always show the pre-processor overlay so clue-cell detection is visible
-    renderPreprocessor(ctx, cellGrid);
-
+    renderPreprocessor(ctx, blobs);
     for (const { slot, answer } of solutions) {
-      if (!answer) continue;   // ambiguous (multiple matches) — show nothing
-      const color = slot.direction === 'across' ? CONFIG.ACROSS_COLOR : CONFIG.DOWN_COLOR;
+      if (!answer) continue;
+      const color = slot.direction === 'horiz' ? CONFIG.ACROSS_COLOR : CONFIG.DOWN_COLOR;
       drawPill(ctx, answer, slot.x, slot.y, slot.cellW, slot.cellH, color);
     }
   }
@@ -776,32 +683,34 @@
       setStep(0);
       await captureFrame();
 
-      // 1 — Detect grid
+      const W = captureCanvas.width, H = captureCanvas.height;
+      const imgData = captureCanvas.getContext('2d').getImageData(0, 0, W, H);
+      const gray    = toGray(imgData.data, W * H);
+      const thresh  = otsu(gray);
+
+      // 1 — Find clue cells via blob detection
       setStep(1);
       await yieldUI();
-      const grid = detectGrid(captureCanvas);
-      if (!grid) {
-        showError('Could not find the crossword grid.\nEnsure the puzzle fills the frame, is well-lit, and held flat.');
+      const blobs = findTextBlobs(gray, W, H, thresh);
+      if (blobs.length === 0) {
+        showError('No text regions found.\nMake sure the crossword fills the frame, is well-lit, and held flat.');
         return;
       }
 
-      // 2 — Classify cells
+      // 2 — Preview blobs
       setStep(2);
       await yieldUI();
-      const cellGrid = buildCellGrid(grid);
 
       // 3 — AI analysis: validate clue cells + solve via Gemini Vision
       setStep(3);
       await yieldUI();
-      const slots    = extractSlots(cellGrid);
-      const solutions = await analyzeCluesWithAI(cellGrid, slots);
+      const solutions = await analyzeCluesWithAI(blobs, gray, W, H);
 
       // 4 — Place answers
       setStep(4);
       await yieldUI();
 
-      // Render & show
-      renderSolution(solutions, cellGrid);
+      renderSolution(solutions, blobs);
       state.hasSolution    = true;
       state.inSolutionMode = true;
       processingOverlay.style.display = 'none';
@@ -829,10 +738,6 @@
     });
     langSelect.addEventListener('change', () => {
       localStorage.setItem(LS_LANG, langSelect.value);
-      if (state.worker && state.workerLang !== langSelect.value) {
-        state.worker.terminate();
-        state.worker = state.workerLang = null;
-      }
     });
   }
 
@@ -867,9 +772,6 @@
     errorPanel.style.display = 'none';
   });
 
-  // Terminate Tesseract worker cleanly on navigation/close
-  window.addEventListener('pagehide', () => state.worker?.terminate());
-
   // ─────────────────────────────────────────────────────────────────────────
   // BOOT
   // ─────────────────────────────────────────────────────────────────────────
@@ -879,8 +781,6 @@
   startCamera();
   loadDictionary();
 
-  // Warm up Tesseract worker in background so first scan is faster
-  ensureWorker(langSelect.value).catch(() => {});
   </script>
 </body>
 </html>
