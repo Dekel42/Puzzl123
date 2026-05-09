@@ -241,7 +241,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.18-debug</div>
+  <div id="version">v0.19-debug</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -294,31 +294,7 @@
 
   const STEPS = ['Capture', 'Find clue cells', 'Preview blobs', 'AI analysis', 'Place answers'];
 
-  // API key must be from a project WITHOUT billing (free tier: 15 RPM / 1500 RPD).
-  // Restrict key to puzzl123.web.app in aistudio.google.com → API keys → Edit.
-  const GEMINI_API_KEY = 'AIzaSyB_XxWV2fdBmXWjaW89-E_xg408Nekk6yA';
-  const GEMINI_URL     = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-
-  const GEMINI_PROMPT = `You are analyzing a cropped cell from a crossword puzzle photo.
-
-A CLUE cell contains printed text (a definition, typically 2+ words) and a small arrow pointing
-toward the empty answer cells. Hebrew puzzles use left arrows and down arrows. English use right and down.
-An ANSWER cell is blank or has only a single handwritten letter/digit — it is NOT a clue cell.
-
-If this IS a clue cell:
-1. Read the printed text exactly (ignore the arrow symbol itself).
-2. Identify ALL arrow directions present: any of "left","right","down","down-left","left-down","down-right","right-down".
-3. Solve the clue for each direction. Give a concise crossword answer (typically 2–8 letters).
-
-Respond with ONLY valid JSON, no markdown:
-{
-  "isClue": true | false,
-  "clueText": "clue text or null",
-  "arrowDirection": "left"|"right"|"down"|"down-left"|"left-down"|"down-right"|"right-down"|null,
-  "horizAnswer": "answer for horizontal direction or null",
-  "downAnswer":  "answer for down direction or null"
-}`;
-
+  const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
   const LS_LANG = 'puzzl_lang';
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -565,28 +541,16 @@ Respond with ONLY valid JSON, no markdown:
   }
 
   async function callGeminiVision(imageBase64) {
-    const resp = await fetch(GEMINI_URL, {
+    const resp = await fetch(ANALYZE_CELL_URL, {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body   : JSON.stringify({
-        contents: [{ role: 'user', parts: [
-          { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
-          { text: GEMINI_PROMPT },
-        ]}],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 300 },
-      }),
+      body   : JSON.stringify({ imageBase64, rightLength: 0, downLength: 0 }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       throw new Error(err.error?.message || `HTTP ${resp.status}`);
     }
-    const data = await resp.json();
-    const raw    = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    const json   = raw.replace(/```(?:json)?\n?|\n?```/g, '').trim();
-    const parsed = JSON.parse(json);
-    if (parsed.horizAnswer) parsed.horizAnswer = normHeb(parsed.horizAnswer);
-    if (parsed.downAnswer)  parsed.downAnswer  = normHeb(parsed.downAnswer);
-    return parsed;
+    return resp.json();
   }
 
   // Sequential with MIN_GAP_MS between request starts to stay under 15 RPM.
