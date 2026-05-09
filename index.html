@@ -241,7 +241,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.17</div>
+  <div id="version">v0.18-debug</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -607,10 +607,11 @@ Respond with ONLY valid JSON, no markdown:
       let result;
       try {
         const data = await callGeminiVision(cropBlobBase64(blob));
+        // Debug card: always show what Gemini returned
+        appendDebug(i + 1, topBlobs.length, data);
         result = { blob, data, color };
       } catch (e) {
-        console.warn('Gemini blob', i, e.message);
-        stepLabel.textContent = `Error ${i+1}: ${e.message.slice(0, 60)}`;
+        appendDebug(i + 1, topBlobs.length, null, e.message);
         result = { blob, data: { isClue: false }, color };
       }
 
@@ -658,6 +659,20 @@ Respond with ONLY valid JSON, no markdown:
       `<div class="card-clue">${clue}</div>` +
       `<div class="card-answer">${answer}</div>`;
     return card;
+  }
+
+  function appendDebug(n, total, data, err) {
+    const el = document.createElement('div');
+    el.style.cssText = 'font-size:11px;color:#888;padding:6px 10px;border-left:2px solid #333;margin:2px 0;font-family:monospace;word-break:break-all;';
+    if (err) {
+      el.style.borderColor = '#f87171';
+      el.style.color = '#f87171';
+      el.textContent = `[${n}/${total}] ERROR: ${err}`;
+    } else {
+      el.style.borderColor = data?.isClue ? '#4ade80' : '#555';
+      el.textContent = `[${n}/${total}] isClue=${data?.isClue} dir=${data?.arrowDirection} h=${data?.horizAnswer} d=${data?.downAnswer}`;
+    }
+    resultsList.appendChild(el);
   }
 
   function appendResult({ data, color }) {
