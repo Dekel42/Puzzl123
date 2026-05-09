@@ -610,7 +610,8 @@ Respond with ONLY valid JSON, no markdown:
         result = { blob, data, color };
       } catch (e) {
         console.warn('Gemini blob', i, e.message);
-        result = { blob, data: { isClue: false, _err: e.message }, color };
+        stepLabel.textContent = `Error ${i+1}: ${e.message.slice(0, 60)}`;
+        result = { blob, data: { isClue: false }, color };
       }
 
       allResults.push(result);
