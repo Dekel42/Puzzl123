@@ -65,7 +65,8 @@ Respond with ONLY valid JSON, no markdown:
       });
 
       const raw    = result.response.text();
-      const json   = raw.replace(/```(?:json)?\n?|\n?```/g, '').trim();
+      logger.info('raw response', raw.slice(0, 300));
+      const json   = raw.replace(/^[\s\S]*?(\{)/,'$1').replace(/\}[\s\S]*$/,'}').trim();
       const parsed = JSON.parse(json);
 
       if (parsed.horizAnswer) parsed.horizAnswer = norm(parsed.horizAnswer);
