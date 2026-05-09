@@ -52,10 +52,10 @@ Respond with ONLY valid JSON, no markdown:
 
     try {
       const genAI = new GoogleGenerativeAI(geminiKey.value());
-      const model = genAI.getGenerativeModel(
-        { model: 'gemini-1.5-flash', generationConfig: { temperature: 0.1, maxOutputTokens: 300 } },
-        { apiVersion: 'v1' },
-      );
+      const model = genAI.getGenerativeModel({
+        model            : 'gemini-2.0-flash-lite',
+        generationConfig : { temperature: 0.1, maxOutputTokens: 300 },
+      });
 
       const result = await model.generateContent({
         contents: [{ role: 'user', parts: [
