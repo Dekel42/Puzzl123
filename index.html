@@ -132,16 +132,45 @@
     #solution-view {
       display: none;
       position: fixed; inset: 0;
-      background: #000;
+      background: #0a0a0a;
       z-index: 50;
       flex-direction: column;
     }
-    #solution-wrapper {
-      position: relative; flex: 1;
+    #photo-strip {
+      flex: 0 0 38vh;
+      background: #000;
       display: flex; align-items: center; justify-content: center;
       overflow: hidden;
     }
     #solution-canvas { max-width: 100%; max-height: 100%; display: block; }
+    #results-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 14px 88px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .answer-card {
+      background: #1c1c1e;
+      border-radius: 14px;
+      padding: 13px 16px 13px 18px;
+      border-left: 4px solid var(--c, #555);
+      display: flex; flex-direction: column; gap: 5px;
+      opacity: 0;
+      transform: translateY(28px);
+      animation: cardIn 0.35s ease forwards;
+    }
+    @keyframes cardIn { to { opacity: 1; transform: translateY(0); } }
+    .card-meta { display: flex; align-items: center; gap: 7px; }
+    .card-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--c, #555); flex-shrink: 0;
+    }
+    .card-dir { font-size: 16px; line-height: 1; }
+    .card-clue { font-size: 14px; color: #999; line-height: 1.4; }
+    .card-answer { font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+    .no-results {
+      text-align: center; color: #555; font-size: 15px; padding: 40px 20px; line-height: 1.6;
+    }
 
     /* ── Bottom bar ── */
     #bottom-bar {
@@ -201,9 +230,10 @@
 
   <!-- ── Solution View ── -->
   <div id="solution-view">
-    <div id="solution-wrapper">
+    <div id="photo-strip">
       <canvas id="solution-canvas"></canvas>
     </div>
+    <div id="results-list"></div>
   </div>
 
   <!-- ── Bottom Bar ── -->
@@ -211,7 +241,7 @@
     <button id="toggle-btn">📷 Back to Camera</button>
   </div>
 
-  <div id="version">v0.13</div>
+  <div id="version">v0.14</div>
 
   <script>
   // ─────────────────────────────────────────────────────────────────────────
@@ -233,20 +263,22 @@
   // CONFIG
   // ─────────────────────────────────────────────────────────────────────────
   const CONFIG = {
-    DARK_PROFILE_THRESHOLD : 0.35,  // fraction of dark pixels to count as a grid line
-    MIN_CELL_DIVISOR       : 30,    // MIN_CELL = min(W,H) / this
-    MIN_GRID_LINES         : 4,     // fewer than this lines in either axis → error
-    CELL_INSET_FRACTION    : 0.15,  // inset % per side when sampling cell color
-    BLOCKED_THRESHOLD      : 0.90,  // >90% dark → blocked (scribbles/shadows can't flip this)
-    CLUE_THRESHOLD         : 0.12,  // >12% dark but not blocked → has printed text/arrow → clue cell
-    ACROSS_COLOR           : '#16a34a',
-    DOWN_COLOR             : '#2563eb',
-    CLUE_BORDER_COLOR      : '#ff2222',
-    TEXT_COLOR             : '#ffffff',
-    PILL_PAD_X             : 7,
-    PILL_PAD_Y             : 4,
-    PILL_RADIUS            : 5,
+    CLUE_BORDER_WIDTH : 0.07,   // blob border = min(w,h) * this
   };
+
+  const BLOB_COLORS = [
+    '#f87171','#fb923c','#facc15','#4ade80',
+    '#60a5fa','#c084fc','#f472b6','#34d399',
+    '#38bdf8','#a78bfa','#fbbf24','#86efac',
+  ];
+
+  const DIR_ARROW = {
+    'left'      : '←', 'right'     : '→', 'down': '↓',
+    'down-left' : '↙', 'left-down' : '↙',
+    'down-right': '↘', 'right-down': '↘',
+  };
+
+  const MAX_BLOBS = 12;
 
   const LANGUAGES = [
     { code: 'heb', label: 'עברית'   },
@@ -276,6 +308,7 @@
   const stepTrack         = $('step-track');
   const solutionView      = $('solution-view');
   const solutionCanvas    = $('solution-canvas');
+  const resultsList       = $('results-list');
   const bottomBar         = $('bottom-bar');
   const toggleBtn         = $('toggle-btn');
   const langSelect        = $('lang-select');
@@ -496,9 +529,7 @@
 
   // ─────────────────────────────────────────────────────────────────────────
   // AI SOLVER  (Gemini Vision via Cloud Function)
-  // For each text blob:
-  //   Round 1: ask Gemini if it's a clue cell and which direction the arrow points.
-  //   Round 2: count cells locally in that direction, then ask Gemini to solve with the length hint.
+  // Single round per blob: is it a clue? read it. solve it.
   // ─────────────────────────────────────────────────────────────────────────
 
   function cropBlobBase64(blob) {
@@ -508,148 +539,87 @@
     return tmp.toDataURL('image/jpeg', 0.85).split(',')[1];
   }
 
-  async function analyzeCluesWithAI(blobs, gray, W, H) {
-    const solutions = [];
+  async function analyzeCluesWithAI(blobs) {
+    // Take the largest blobs first — they're most likely to be real clue cells
+    const topBlobs = [...blobs]
+      .sort((a, b) => b.w * b.h - a.w * a.h)
+      .slice(0, MAX_BLOBS);
 
-    // Round 1 — fire all blobs in parallel, get direction only
-    const round1 = await Promise.all(blobs.map(async blob => {
-      const imageBase64 = cropBlobBase64(blob);
+    return Promise.all(topBlobs.map(async (blob, i) => {
+      const color = BLOB_COLORS[i % BLOB_COLORS.length];
       try {
         const resp = await fetch(ANALYZE_CELL_URL, {
           method : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body   : JSON.stringify({ imageBase64, rightLength: 0, downLength: 0 }),
+          body   : JSON.stringify({ imageBase64: cropBlobBase64(blob), rightLength: 0, downLength: 0 }),
         });
-        return { blob, data: await resp.json() };
+        return { blob, data: await resp.json(), color };
       } catch (_) {
-        return { blob, data: { isClue: false } };
+        return { blob, data: { isClue: false }, color };
       }
     }));
-
-    // Round 2 — for confirmed clues: count cells, then solve with lengths
-    const round2 = await Promise.all(round1.map(async ({ blob, data }) => {
-      if (!data.isClue || !data.arrowDirection) return null;
-      const dir = data.arrowDirection;
-
-      const hasLeft  = dir === 'left'  || dir === 'down-left'  || dir === 'left-down';
-      const hasRight = dir === 'right' || dir === 'down-right' || dir === 'right-down';
-      const hasDown  = dir === 'down'  || dir === 'down-left'  || dir === 'left-down'
-                    || dir === 'down-right' || dir === 'right-down';
-
-      const horizDir = hasLeft ? 'left' : (hasRight ? 'right' : null);
-      const horizLen = horizDir ? countCells(blob, horizDir, gray, W, H) : 0;
-      const downLen  = hasDown  ? countCells(blob, 'down',   gray, W, H) : 0;
-
-      if (horizLen === 0 && downLen === 0) return null;
-
-      try {
-        const imageBase64 = cropBlobBase64(blob);
-        const resp = await fetch(ANALYZE_CELL_URL, {
-          method : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body   : JSON.stringify({ imageBase64, rightLength: horizLen, downLength: downLen }),
-        });
-        return { blob, solved: await resp.json(), horizDir, horizLen, downLen };
-      } catch (_) {
-        return null;
-      }
-    }));
-
-    for (const r of round2) {
-      if (!r) continue;
-      const { blob, solved, horizDir, horizLen, downLen } = r;
-      if (solved.horizAnswer && horizLen > 0 && horizDir) {
-        const slotX = horizDir === 'left' ? blob.x - horizLen * blob.w : blob.x + blob.w;
-        solutions.push({
-          slot  : { direction: 'horiz', length: horizLen, x: slotX, y: blob.y, cellW: blob.w, cellH: blob.h },
-          answer: solved.horizAnswer,
-        });
-      }
-      if (solved.downAnswer && downLen > 0) {
-        solutions.push({
-          slot  : { direction: 'down', length: downLen, x: blob.x, y: blob.y + blob.h, cellW: blob.w, cellH: blob.h },
-          answer: solved.downAnswer,
-        });
-      }
-    }
-
-    return solutions;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // CANVAS RENDERER
-  // Draws everything directly on #solution-canvas — no CSS-positioned divs.
+  // RENDERER
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Polyfill for roundRect (Chrome < 99, Safari < 15.4, Firefox < 112)
-  function polyfillRoundRect() {
-    if (CanvasRenderingContext2D.prototype.roundRect) return;
-    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
-      if (w < 2 * r) r = w / 2;
-      if (h < 2 * r) r = h / 2;
-      this.beginPath();
-      this.moveTo(x + r, y);
-      this.arcTo(x + w, y,     x + w, y + h, r);
-      this.arcTo(x + w, y + h, x,     y + h, r);
-      this.arcTo(x,     y + h, x,     y,     r);
-      this.arcTo(x,     y,     x + w, y,     r);
-      this.closePath();
-    };
-  }
+  function renderPhoto(allResults) {
+    solutionCanvas.width  = captureCanvas.width;
+    solutionCanvas.height = captureCanvas.height;
+    const ctx = solutionCanvas.getContext('2d');
+    ctx.drawImage(captureCanvas, 0, 0);
 
-  // Detect Hebrew or Arabic characters (need RTL canvas rendering)
-  const isRTL = text => /[֐-׿؀-ۿ]/.test(text);
-
-  function drawPill(ctx, text, x, y, cellW, cellH, color) {
-    const rtl      = isRTL(text);
-    const fontSize = Math.max(10, Math.round(Math.min(cellW, cellH) / 3));
-    ctx.save();
-    ctx.font         = `bold ${fontSize}px Arial`;
-    ctx.direction    = rtl ? 'rtl' : 'ltr';
-    ctx.textBaseline = 'middle';
-
-    const tw = ctx.measureText(text).width;
-    const pw = tw + CONFIG.PILL_PAD_X * 2;
-    const ph = fontSize + CONFIG.PILL_PAD_Y * 2;
-    const px = x + 2;
-    const py = y + (cellH - ph) / 2;
-
-    ctx.fillStyle = color;
-    ctx.roundRect(px, py, pw, ph, CONFIG.PILL_RADIUS);
-    ctx.fill();
-
-    ctx.fillStyle = CONFIG.TEXT_COLOR;
-    if (rtl) {
-      ctx.textAlign = 'right';
-      ctx.fillText(text, px + pw - CONFIG.PILL_PAD_X, py + ph / 2);
-    } else {
-      ctx.textAlign = 'left';
-      ctx.fillText(text, px + CONFIG.PILL_PAD_X, py + ph / 2);
-    }
-    ctx.restore();
-  }
-
-  function renderPreprocessor(ctx, blobs) {
-    for (const blob of blobs) {
-      const lw = Math.max(2, Math.round(Math.min(blob.w, blob.h) * 0.07));
+    for (const { blob, data, color } of allResults) {
+      const lw = Math.max(3, Math.round(Math.min(blob.w, blob.h) * CONFIG.CLUE_BORDER_WIDTH));
       ctx.save();
-      ctx.strokeStyle = CONFIG.CLUE_BORDER_COLOR;
-      ctx.lineWidth   = lw;
+      if (data.isClue) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = lw;
+        ctx.shadowColor  = color;
+        ctx.shadowBlur   = lw * 2;
+      } else {
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+        ctx.lineWidth   = Math.max(1, lw - 1);
+      }
       ctx.strokeRect(blob.x + lw / 2, blob.y + lw / 2, blob.w - lw, blob.h - lw);
       ctx.restore();
     }
   }
 
-  function renderSolution(solutions, blobs) {
-    solutionCanvas.width  = captureCanvas.width;
-    solutionCanvas.height = captureCanvas.height;
-    const ctx = solutionCanvas.getContext('2d');
-    ctx.drawImage(captureCanvas, 0, 0);
-    renderPreprocessor(ctx, blobs);
-    for (const { slot, answer } of solutions) {
-      if (!answer) continue;
-      const color = slot.direction === 'horiz' ? CONFIG.ACROSS_COLOR : CONFIG.DOWN_COLOR;
-      drawPill(ctx, answer, slot.x, slot.y, slot.cellW, slot.cellH, color);
+  function makeCard(clueText, answer, dirArrow, color, index) {
+    const card = document.createElement('div');
+    card.className = 'answer-card';
+    card.style.cssText = `--c:${color}; animation-delay:${index * 110}ms`;
+    const clue = clueText || '—';
+    card.innerHTML =
+      `<div class="card-meta"><div class="card-dot"></div><span class="card-dir">${dirArrow}</span></div>` +
+      `<div class="card-clue">${clue}</div>` +
+      `<div class="card-answer">${answer}</div>`;
+    return card;
+  }
+
+  function buildCards(allResults) {
+    resultsList.innerHTML = '';
+    let cardIndex = 0;
+
+    for (const { data, color } of allResults) {
+      if (!data.isClue) continue;
+      const dir    = data.arrowDirection || '';
+      const arrow  = DIR_ARROW[dir] || '→';
+      const dArrow = DIR_ARROW['down'] || '↓';
+      const hasH   = data.horizAnswer && data.horizAnswer.length > 0;
+      const hasD   = data.downAnswer  && data.downAnswer.length  > 0;
+
+      if (hasH) resultsList.appendChild(makeCard(data.clueText, data.horizAnswer, arrow,  color, cardIndex++));
+      if (hasD) resultsList.appendChild(makeCard(data.clueText, data.downAnswer,  dArrow, color, cardIndex++));
+    }
+
+    if (cardIndex === 0) {
+      const p = document.createElement('p');
+      p.className   = 'no-results';
+      p.textContent = 'No clues solved.\nMake sure clue cells are clearly visible and well-lit.';
+      resultsList.appendChild(p);
     }
   }
 
@@ -688,7 +658,7 @@
       const gray    = toGray(imgData.data, W * H);
       const thresh  = otsu(gray);
 
-      // 1 — Find clue cells via blob detection
+      // 1 — Find text blobs
       setStep(1);
       await yieldUI();
       const blobs = findTextBlobs(gray, W, H, thresh);
@@ -697,20 +667,22 @@
         return;
       }
 
-      // 2 — Preview blobs
+      // 2 — Preview
       setStep(2);
       await yieldUI();
 
-      // 3 — AI analysis: validate clue cells + solve via Gemini Vision
+      // 3 — AI: identify clues + solve
       setStep(3);
       await yieldUI();
-      const solutions = await analyzeCluesWithAI(blobs, gray, W, H);
+      const allResults = await analyzeCluesWithAI(blobs);
 
-      // 4 — Place answers
+      // 4 — Build results
       setStep(4);
       await yieldUI();
 
-      renderSolution(solutions, blobs);
+      renderPhoto(allResults);
+      buildCards(allResults);
+
       state.hasSolution    = true;
       state.inSolutionMode = true;
       processingOverlay.style.display = 'none';
@@ -775,7 +747,6 @@
   // ─────────────────────────────────────────────────────────────────────────
   // BOOT
   // ─────────────────────────────────────────────────────────────────────────
-  polyfillRoundRect();
   initLangSelector();
   initStepTrack();
   startCamera();
