@@ -247,6 +247,13 @@
         audio: false,
       });
       video.srcObject = stream;
+
+      // Enable continuous autofocus if the device supports it
+      const track = stream.getVideoTracks()[0];
+      const caps  = track.getCapabilities?.() || {};
+      if (caps.focusMode?.includes('continuous')) {
+        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+      }
     } catch (err) { alert('Camera unavailable: ' + err.message); }
   }
 
