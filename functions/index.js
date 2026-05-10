@@ -54,7 +54,7 @@ Respond with ONLY valid JSON, no markdown:
       const genAI = new GoogleGenerativeAI(geminiKey.value());
       const model = genAI.getGenerativeModel({
         model            : 'gemini-2.5-flash',
-        generationConfig : { temperature: 0.1, maxOutputTokens: 300 },
+        generationConfig : { temperature: 0.1, maxOutputTokens: 600 },
       });
 
       const result = await model.generateContent({
@@ -64,10 +64,15 @@ Respond with ONLY valid JSON, no markdown:
         ]}],
       });
 
-      const raw    = result.response.text();
-      logger.info('raw response', raw.slice(0, 300));
-      const json   = raw.replace(/^[\s\S]*?(\{)/,'$1').replace(/\}[\s\S]*$/,'}').trim();
-      const parsed = JSON.parse(json);
+      const raw       = result.response.text();
+      logger.info('raw response', raw.slice(0, 500));
+      const firstBrace = raw.indexOf('{');
+      const lastBrace  = raw.lastIndexOf('}');
+      if (firstBrace === -1 || lastBrace <= firstBrace) {
+        logger.error('no JSON object in response', raw.slice(0, 200));
+        return res.json({ isClue: false, clueText: null, arrowDirection: null, horizAnswer: null, downAnswer: null });
+      }
+      const parsed = JSON.parse(raw.slice(firstBrace, lastBrace + 1));
 
       if (parsed.horizAnswer) parsed.horizAnswer = norm(parsed.horizAnswer);
       if (parsed.downAnswer)  parsed.downAnswer  = norm(parsed.downAnswer);
