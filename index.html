@@ -238,6 +238,7 @@
   const langSelect       = $('lang-select');
 
   let cardIndex = 0;
+  let lastCropDataUrl = null;
 
   // ── Camera ──────────────────────────────────────────────────────────────────
   async function startCamera() {
@@ -309,10 +310,17 @@
     const pw = Math.min(Math.round(sW * scaleX), photoW - px);
     const ph = Math.min(Math.round(sH * scaleY), photoH - py);
 
+    // Upscale small crops so Gemini can read the text reliably
+    const MIN_PX = 480;
+    const upscale = Math.max(1, MIN_PX / Math.min(pw, ph));
+    const outW = Math.round(pw * upscale);
+    const outH = Math.round(ph * upscale);
+
     const tmp = document.createElement('canvas');
-    tmp.width = pw; tmp.height = ph;
-    tmp.getContext('2d').drawImage(captureCanvas, px, py, pw, ph, 0, 0, pw, ph);
-    return tmp.toDataURL('image/jpeg', 0.92).split(',')[1];
+    tmp.width = outW; tmp.height = outH;
+    tmp.getContext('2d').drawImage(captureCanvas, px, py, pw, ph, 0, 0, outW, outH);
+    lastCropDataUrl = tmp.toDataURL('image/jpeg', 0.92);
+    return lastCropDataUrl.split(',')[1];
   }
 
   // ── Gemini call ─────────────────────────────────────────────────────────────
@@ -335,11 +343,17 @@
     setTimeout(() => { aimBox.style.borderColor = ''; }, 700);
   }
 
+  function cropThumb() {
+    if (!lastCropDataUrl) return '';
+    return `<img src="${lastCropDataUrl}" style="width:100%;max-height:80px;object-fit:contain;border-radius:6px;margin-bottom:4px;background:#000;">`;
+  }
+
   function makeAnswerCard(clueText, answer, arrow, color) {
     const card = document.createElement('div');
     card.className = 'answer-card';
     card.style.cssText = `--c:${color}`;
     card.innerHTML =
+      cropThumb() +
       `<div class="card-meta"><div class="card-dot"></div><span class="card-dir">${arrow}</span></div>` +
       `<div class="card-clue">${clueText || ''}</div>` +
       `<div class="card-answer">${answer}</div>`;
@@ -349,7 +363,7 @@
   function makeMsgCard(text) {
     const el = document.createElement('div');
     el.className = 'msg-card';
-    el.textContent = text;
+    el.innerHTML = cropThumb() + `<span>${text}</span>`;
     return el;
   }
 
