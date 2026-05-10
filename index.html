@@ -196,17 +196,12 @@
     <div id="results-list"></div>
   </div>
 
-  <div id="version">v0.20</div>
+  <div id="version">v0.22</div>
 
   <script>
   const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
   const LS_LANG = 'puzzl_lang';
 
-  const BLOB_COLORS = [
-    '#f87171','#fb923c','#facc15','#4ade80',
-    '#60a5fa','#c084fc','#f472b6','#34d399',
-    '#38bdf8','#a78bfa','#fbbf24','#86efac',
-  ];
   const DIR_ARROW = {
     'left':'←','right':'→','down':'↓',
     'down-left':'↙','left-down':'↙',
@@ -237,14 +232,14 @@
   const clearBtn         = $('clear-btn');
   const langSelect       = $('lang-select');
 
-  let cardIndex = 0;
   let lastCropDataUrl = null;
+  const CARD_COLOR = '#22c55e';
 
   // ── Camera ──────────────────────────────────────────────────────────────────
   async function startCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode:{ ideal:'environment' }, width:{ ideal:3840, min:640 }, height:{ ideal:2160, min:480 } },
+        video: { facingMode:{ ideal:'environment' }, width:{ ideal:3840, min:1280 }, height:{ ideal:2160, min:720 } },
         audio: false,
       });
       video.srcObject = stream;
@@ -318,9 +313,50 @@
 
     const tmp = document.createElement('canvas');
     tmp.width = outW; tmp.height = outH;
-    tmp.getContext('2d').drawImage(captureCanvas, px, py, pw, ph, 0, 0, outW, outH);
+    const ctx = tmp.getContext('2d');
+    ctx.drawImage(captureCanvas, px, py, pw, ph, 0, 0, outW, outH);
+
+    enhanceForOCR(ctx, outW, outH);
+
     lastCropDataUrl = tmp.toDataURL('image/jpeg', 0.92);
     return lastCropDataUrl.split(',')[1];
+  }
+
+  // Boost contrast then sharpen so Gemini reads text more reliably
+  function enhanceForOCR(ctx, w, h) {
+    // Contrast boost
+    let id = ctx.getImageData(0, 0, w, h);
+    let d  = id.data;
+    const f = 1.5, bias = 128 * (1 - f);
+    for (let i = 0; i < d.length; i += 4) {
+      d[i]   = Math.max(0, Math.min(255, f * d[i]   + bias));
+      d[i+1] = Math.max(0, Math.min(255, f * d[i+1] + bias));
+      d[i+2] = Math.max(0, Math.min(255, f * d[i+2] + bias));
+    }
+    ctx.putImageData(id, 0, 0);
+
+    // Sharpen (3×3 kernel)
+    id = ctx.getImageData(0, 0, w, h);
+    const src = new Uint8ClampedArray(id.data);
+    d = id.data;
+    const K = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          let v = 0;
+          for (let ky = -1; ky <= 1; ky++) {
+            for (let kx = -1; kx <= 1; kx++) {
+              const ny = Math.max(0, Math.min(h - 1, y + ky));
+              const nx = Math.max(0, Math.min(w - 1, x + kx));
+              v += src[(ny * w + nx) * 4 + c] * K[(ky + 1) * 3 + (kx + 1)];
+            }
+          }
+          d[i + c] = Math.max(0, Math.min(255, v));
+        }
+      }
+    }
+    ctx.putImageData(id, 0, 0);
   }
 
   // ── Gemini call ─────────────────────────────────────────────────────────────
@@ -368,7 +404,7 @@
   }
 
   function showResult(data) {
-    const color = BLOB_COLORS[cardIndex++ % BLOB_COLORS.length];
+    const color = CARD_COLOR;
     const arrow = DIR_ARROW[data.arrowDirection || ''] || '?';
     const hasH  = (data.horizAnswer || '').length > 0;
     const hasD  = (data.downAnswer  || '').length > 0;
@@ -426,7 +462,6 @@
   clearBtn.addEventListener('click', () => {
     resultsList.innerHTML = '';
     resultsPanel.style.display = 'none';
-    cardIndex = 0;
   });
 
   errorBackBtn.addEventListener('click', () => { errorPanel.style.display = 'none'; });
