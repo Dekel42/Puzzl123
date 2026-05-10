@@ -36,26 +36,28 @@ exports.analyzeCell = onRequest(
     if (!rightLength && !downLength) hints.push('No letter count given — choose the most natural single-word crossword answer (typically 2–8 letters).');
 
     const prompt = `You are analyzing a cropped cell from a ${langName} crossword puzzle photo.
+You may see parts of neighbouring cells at the edges — focus on the main content in the centre.
 
-A CLUE cell contains printed text (a definition, typically 2+ words) and a small arrow pointing
-toward the empty answer cells. Hebrew/Arabic puzzles use left arrows and down arrows. English/European use right and down.
-An ANSWER cell is blank or has only a single handwritten letter/digit — it is NOT a clue cell.
+A CLUE cell has printed text (a word or phrase definition) AND a visible arrow (←↓↙↘→↗).
+Even a single printed word next to an arrow counts as a clue cell.
+An ANSWER cell is blank white space or contains only a single handwritten letter — no arrow.
 
 ${hints.join('\n')}
 
 If this IS a clue cell:
-1. Read the printed text exactly as it appears (ignore the arrow symbol itself).
+1. Read the printed text exactly (ignore the arrow symbol itself).
 2. Identify the arrow direction: "left", "right", "down", "down-left", "left-down", "down-right", or "right-down".
-3. Solve the clue in ${langName}. The answer must be a single word with no spaces.
-   Think like a crossword editor: use common crossword vocabulary, proper nouns are allowed.
+3. Solve the clue in ${langName}. Answer must be a single word, no spaces.
+   Use common crossword vocabulary; proper nouns are allowed.
+   If you cannot solve it confidently, return null for that answer field.
 
 Respond with ONLY valid JSON, no markdown:
 {
   "isClue": true | false,
   "clueText": "exact clue text or null",
   "arrowDirection": "left" | "right" | "down" | "down-left" | "left-down" | "down-right" | "right-down" | null,
-  "horizAnswer": "single-word answer for horizontal direction or null",
-  "downAnswer":  "single-word answer for down direction or null"
+  "horizAnswer": "answer or null",
+  "downAnswer":  "answer or null"
 }`;
 
     try {

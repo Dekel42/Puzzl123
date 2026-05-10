@@ -196,7 +196,7 @@
     <div id="results-list"></div>
   </div>
 
-  <div id="version">v0.22</div>
+  <div id="version">v0.23</div>
 
   <script>
   const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
@@ -253,68 +253,43 @@
     } catch (err) { alert('Camera unavailable: ' + err.message); }
   }
 
-  async function captureFrame() {
-    if (window.ImageCapture && video.srcObject) {
-      try {
-        const track   = video.srcObject.getVideoTracks()[0];
-        const capture = new ImageCapture(track);
-        const blob    = await capture.takePhoto();
-        const bitmap  = await createImageBitmap(blob);
-        captureCanvas.width  = bitmap.width;
-        captureCanvas.height = bitmap.height;
-        captureCanvas.getContext('2d').drawImage(bitmap, 0, 0);
-        bitmap.close();
-        return;
-      } catch (_) {}
-    }
-    captureCanvas.width  = video.videoWidth  || 640;
-    captureCanvas.height = video.videoHeight || 480;
-    captureCanvas.getContext('2d').drawImage(video, 0, 0);
-  }
-
-  // Map aim-box screen coordinates → captureCanvas pixel crop
+  // Crop the aim-box directly from the video element.
+  // Drawing from <video> guarantees coordinates match the display —
+  // avoids rotation/aspect-ratio mismatches with ImageCapture photos.
   function cropAimBoxBase64() {
     const boxRect = aimBox.getBoundingClientRect();
     const vidRect = video.getBoundingClientRect();
 
-    const streamW = video.videoWidth  || captureCanvas.width;
-    const streamH = video.videoHeight || captureCanvas.height;
+    const streamW = video.videoWidth  || 1280;
+    const streamH = video.videoHeight || 720;
     const dispW   = vidRect.width;
     const dispH   = vidRect.height;
-    const photoW  = captureCanvas.width;
-    const photoH  = captureCanvas.height;
 
-    // object-fit: cover — scale that fills the display area
+    // object-fit: cover scale
     const coverScale = Math.max(dispW / streamW, dispH / streamH);
     const offX = (dispW - streamW * coverScale) / 2;
     const offY = (dispH - streamH * coverScale) / 2;
 
-    // Box position in display coords → stream pixel coords
+    // Aim-box in stream pixel coords
     const relX = boxRect.left - vidRect.left;
     const relY = boxRect.top  - vidRect.top;
-    const sX = (relX - offX) / coverScale;
-    const sY = (relY - offY) / coverScale;
-    const sW = boxRect.width  / coverScale;
-    const sH = boxRect.height / coverScale;
+    const sX = Math.max(0, (relX - offX) / coverScale);
+    const sY = Math.max(0, (relY - offY) / coverScale);
+    const sW = Math.min(boxRect.width  / coverScale, streamW - sX);
+    const sH = Math.min(boxRect.height / coverScale, streamH - sY);
 
-    // Stream pixels → full-photo pixels (ImageCapture may be higher res)
-    const scaleX = photoW / streamW;
-    const scaleY = photoH / streamH;
-    const px = Math.max(0, Math.round(sX * scaleX));
-    const py = Math.max(0, Math.round(sY * scaleY));
-    const pw = Math.min(Math.round(sW * scaleX), photoW - px);
-    const ph = Math.min(Math.round(sH * scaleY), photoH - py);
-
-    // Upscale small crops so Gemini can read the text reliably
+    // Upscale small crops so Gemini can read text reliably
     const MIN_PX = 480;
-    const upscale = Math.max(1, MIN_PX / Math.min(pw, ph));
-    const outW = Math.round(pw * upscale);
-    const outH = Math.round(ph * upscale);
+    const upscale = Math.max(1, MIN_PX / Math.min(sW, sH));
+    const outW = Math.round(sW * upscale);
+    const outH = Math.round(sH * upscale);
 
     const tmp = document.createElement('canvas');
     tmp.width = outW; tmp.height = outH;
     const ctx = tmp.getContext('2d');
-    ctx.drawImage(captureCanvas, px, py, pw, ph, 0, 0, outW, outH);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(video, sX, sY, sW, sH, 0, 0, outW, outH);
 
     enhanceForOCR(ctx, outW, outH);
 
@@ -431,7 +406,6 @@
     analyzingOverlay.style.display = 'flex';
 
     try {
-      await captureFrame();
       const b64  = cropAimBoxBase64();
       const data = await callGeminiVision(b64);
       showResult(data);
