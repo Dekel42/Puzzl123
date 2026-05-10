@@ -5,7 +5,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios                  = require('axios');
 const cheerio                = require('cheerio');
 
-const geminiKey = defineSecret('GEMINI_API_KEY');
+const geminiKey = defineSecret('GEMINI_API_KEY'); // v0.23
 
 const FINAL_NORM = { 'ן':'נ', 'ם':'מ', 'ף':'פ', 'ך':'כ', 'ץ':'צ' };
 const norm = s => s.replace(/[ןםףךץ]/g, c => FINAL_NORM[c]);
