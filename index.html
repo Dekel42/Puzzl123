@@ -6,348 +6,251 @@
   <title>Crossword Solver</title>
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; color: #fff; font-family: Arial, sans-serif; height: 100dvh; overflow: hidden; }
 
-    body {
-      background: #000;
-      color: #fff;
-      font-family: Arial, sans-serif;
-      height: 100dvh;
-      overflow: hidden;
-    }
-
-    /* ── Camera view ── */
+    /* ── Camera ── */
     #camera-view { position: relative; width: 100%; height: 100dvh; }
-
     #video { width: 100%; height: 100%; object-fit: cover; display: block; }
-
     #capture-canvas { display: none; }
+
+    /* ── Aim overlay: box-shadow creates dark shade everywhere except the box ── */
+    #aim-box {
+      position: absolute;
+      top: 37%;
+      left: 50%;
+      width: min(72vw, 340px);
+      aspect-ratio: 3 / 2;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+      border: 2.5px solid rgba(255, 255, 255, 0.85);
+      border-radius: 6px;
+      pointer-events: none;
+      z-index: 5;
+      transition: border-color 0.4s;
+    }
+    /* Corner brackets for viewfinder feel */
+    #aim-box::before, #aim-box::after {
+      content: '';
+      position: absolute;
+      width: 20px; height: 20px;
+      border-color: #fff;
+      border-style: solid;
+      opacity: 0.9;
+    }
+    #aim-box::before { top: -4px; left: -4px;   border-width: 3px 0 0 3px; border-radius: 3px 0 0 0; }
+    #aim-box::after  { bottom: -4px; right: -4px; border-width: 0 3px 3px 0; border-radius: 0 0 3px 0; }
+    #aim-label {
+      position: absolute;
+      top: calc(100% + 12px);
+      left: 0; right: 0;
+      text-align: center;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.72);
+      text-shadow: 0 1px 4px #000;
+      pointer-events: none;
+    }
 
     /* ── Language selector ── */
     #lang-select {
-      position: absolute;
-      top: 16px; right: 16px;
-      background: rgba(0,0,0,0.65);
-      color: #fff;
-      border: 1px solid rgba(255,255,255,0.35);
-      border-radius: 8px;
-      padding: 7px 10px;
-      font-size: 14px;
-      cursor: pointer;
-      z-index: 10;
-      -webkit-appearance: none;
-      appearance: none;
+      position: absolute; top: 16px; right: 16px;
+      background: rgba(0,0,0,0.65); color: #fff;
+      border: 1px solid rgba(255,255,255,0.35); border-radius: 8px;
+      padding: 7px 10px; font-size: 14px; cursor: pointer; z-index: 10;
+      -webkit-appearance: none; appearance: none;
     }
     #lang-select option { background: #111; color: #fff; }
 
     /* ── Scan button ── */
     #scan-btn {
       position: absolute;
-      bottom: 48px; left: 50%;
+      bottom: 40px; left: 50%;
       transform: translateX(-50%);
       background: #fff; color: #000;
       border: none; border-radius: 50%;
       width: 72px; height: 72px;
-      font-size: 13px; font-weight: 700;
-      letter-spacing: 0.5px;
-      cursor: pointer;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-      transition: transform 0.1s;
-      z-index: 10;
+      font-size: 13px; font-weight: 700; letter-spacing: 0.5px;
+      cursor: pointer; box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      transition: transform 0.1s; z-index: 60;
     }
     #scan-btn:active { transform: translateX(-50%) scale(0.92); }
+    #scan-btn:disabled { background: #888; cursor: default; }
 
-    /* ── Processing overlay ── */
-    #processing-overlay {
+    /* ── Analyzing overlay ── */
+    #analyzing-overlay {
       display: none;
       position: fixed; inset: 0;
-      background: rgba(0,0,0,0.9);
-      z-index: 100;
+      background: rgba(0,0,0,0.6);
+      z-index: 30;
       flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 18px;
-      padding: 24px;
+      align-items: center; justify-content: center;
+      gap: 14px;
     }
-
-    #ad-placeholder {
-      width: 320px; max-width: 90vw; height: 50px;
-      background: #1a1a1a;
-      border: 1px dashed #444;
-      display: flex; align-items: center; justify-content: center;
-      color: #555; font-size: 12px; border-radius: 4px;
-    }
-
     .spinner {
-      width: 48px; height: 48px;
-      border: 4px solid #333;
-      border-top-color: #00ff88;
-      border-radius: 50%;
-      animation: spin 0.75s linear infinite;
+      width: 44px; height: 44px;
+      border: 4px solid #333; border-top-color: #00ff88;
+      border-radius: 50%; animation: spin 0.75s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-
-    #step-label { font-size: 17px; font-weight: 600; min-height: 26px; }
-
-    #step-track {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    .step-item {
-      font-size: 12px;
-      color: #555;
-      padding: 4px 10px;
-      border-radius: 20px;
-      border: 1px solid #333;
-      transition: background 0.25s, color 0.25s, border-color 0.25s;
-      white-space: nowrap;
-    }
-    .step-item.active { background: #fff;    color: #000; border-color: #fff; }
-    .step-item.done   { background: #22c55e; color: #fff; border-color: #22c55e; }
+    #analyzing-label { font-size: 16px; font-weight: 600; }
 
     /* ── Error panel ── */
     #error-panel {
-      display: none;
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.93);
-      z-index: 110;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 20px;
-      padding: 32px;
-      text-align: center;
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.93); z-index: 110;
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 20px; padding: 32px; text-align: center;
     }
     #error-panel h2 { font-size: 22px; color: #f87171; }
-    #error-msg { color: #aaa; font-size: 15px; line-height: 1.6; }
+    #error-msg { color: #aaa; font-size: 15px; line-height: 1.6; max-width: 320px; }
     #error-back-btn {
-      background: #fff; color: #000;
-      border: none; border-radius: 24px;
-      padding: 12px 32px; font-size: 16px; font-weight: 600;
-      cursor: pointer;
+      background: #fff; color: #000; border: none; border-radius: 24px;
+      padding: 12px 32px; font-size: 16px; font-weight: 600; cursor: pointer;
     }
 
-    /* ── Solution view ── */
-    #solution-view {
-      display: none;
-      position: fixed; inset: 0;
-      background: #0a0a0a;
-      z-index: 50;
-      flex-direction: column;
-    }
-    #photo-strip {
-      flex: 0 0 38vh;
-      background: #000;
-      display: flex; align-items: center; justify-content: center;
-      overflow: hidden;
-    }
-    #solution-canvas { max-width: 100%; max-height: 100%; display: block; }
-    #results-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 12px 14px 88px;
-      display: flex; flex-direction: column; gap: 10px;
-    }
-    .answer-card {
-      background: #1c1c1e;
-      border-radius: 14px;
-      padding: 13px 16px 13px 18px;
-      border-left: 4px solid var(--c, #555);
-      display: flex; flex-direction: column; gap: 5px;
-      opacity: 0;
-      transform: translateY(28px);
-      animation: cardIn 0.35s ease forwards;
-    }
-    @keyframes cardIn { to { opacity: 1; transform: translateY(0); } }
-    .card-meta { display: flex; align-items: center; gap: 7px; }
-    .card-dot {
-      width: 9px; height: 9px; border-radius: 50%;
-      background: var(--c, #555); flex-shrink: 0;
-    }
-    .card-dir { font-size: 16px; line-height: 1; }
-    .card-clue { font-size: 14px; color: #999; line-height: 1.4; }
-    .card-answer { font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
-    .no-results {
-      text-align: center; color: #555; font-size: 15px; padding: 40px 20px; line-height: 1.6;
-    }
-
-    /* ── Bottom bar ── */
-    #bottom-bar {
+    /* ── Results bottom sheet ── */
+    #results-panel {
       display: none;
       position: fixed; bottom: 0; left: 0; right: 0;
-      padding: 14px 20px;
-      background: linear-gradient(transparent, rgba(0,0,0,0.85));
-      z-index: 200;
-      justify-content: center;
+      max-height: 48dvh;
+      background: #111;
+      border-radius: 18px 18px 0 0;
+      border-top: 1px solid #2a2a2a;
+      z-index: 50;
+      flex-direction: column;
+      overflow: hidden;
     }
-    #toggle-btn {
-      background: #00cc66; color: #fff;
-      border: none; border-radius: 28px;
-      padding: 13px 36px; font-size: 16px; font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 4px 16px rgba(0,204,102,0.35);
-      transition: transform 0.1s;
+    #results-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px 8px;
+      border-bottom: 1px solid #222;
+      flex-shrink: 0;
     }
-    #toggle-btn:active { transform: scale(0.95); }
+    #results-title { font-size: 14px; font-weight: 600; color: #bbb; }
+    #clear-btn {
+      background: none; border: none; color: #f87171;
+      font-size: 13px; cursor: pointer; padding: 4px 8px; border-radius: 6px;
+    }
+    #results-list {
+      flex: 1; overflow-y: auto;
+      padding: 10px 14px 90px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
 
-    /* ── Version stamp ── */
+    /* ── Cards ── */
+    .answer-card {
+      background: #1c1c1e; border-radius: 12px;
+      padding: 11px 14px 11px 16px;
+      border-left: 4px solid var(--c, #555);
+      display: flex; flex-direction: column; gap: 5px;
+      animation: cardIn 0.3s ease forwards;
+      flex-shrink: 0;
+    }
+    @keyframes cardIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    .card-meta { display: flex; align-items: center; gap: 7px; }
+    .card-dot  { width: 8px; height: 8px; border-radius: 50%; background: var(--c, #555); flex-shrink: 0; }
+    .card-dir  { font-size: 18px; line-height: 1; }
+    .card-clue { font-size: 13px; color: #888; line-height: 1.4; }
+    .card-answer { font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+    .msg-card {
+      text-align: center; color: #666; font-size: 14px;
+      padding: 12px 16px; border-radius: 10px; background: #1a1a1a;
+      animation: cardIn 0.3s ease forwards; flex-shrink: 0;
+    }
+
+    /* ── Version ── */
     #version {
-      position: fixed;
-      bottom: 8px; left: 12px;
-      font-size: 11px;
-      color: rgba(255,255,255,0.35);
-      z-index: 300;
-      pointer-events: none;
-      font-family: monospace;
+      position: fixed; bottom: 6px; left: 10px;
+      font-size: 10px; color: rgba(255,255,255,0.25);
+      z-index: 300; pointer-events: none; font-family: monospace;
     }
   </style>
 </head>
 <body>
 
-  <!-- ── Camera View ── -->
   <div id="camera-view">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="capture-canvas"></canvas>
+    <div id="aim-box">
+      <span id="aim-label">Aim at a clue cell, then tap SCAN</span>
+    </div>
     <select id="lang-select"></select>
     <button id="scan-btn">SCAN</button>
   </div>
 
-  <!-- ── Processing Overlay ── -->
-  <div id="processing-overlay">
-    <div id="ad-placeholder">[ Advertisement ]</div>
+  <div id="analyzing-overlay">
     <div class="spinner"></div>
-    <div id="step-label">Initializing…</div>
-    <div id="step-track"></div>
+    <div id="analyzing-label">Analyzing…</div>
   </div>
 
-  <!-- ── Error Panel ── -->
   <div id="error-panel">
-    <h2>Grid not detected</h2>
-    <p id="error-msg">Make sure the crossword fills most of the frame, is well-lit, and held flat.</p>
+    <h2>Error</h2>
+    <p id="error-msg"></p>
     <button id="error-back-btn">↩ Try Again</button>
   </div>
 
-  <!-- ── Solution View ── -->
-  <div id="solution-view">
-    <div id="photo-strip">
-      <canvas id="solution-canvas"></canvas>
+  <div id="results-panel">
+    <div id="results-header">
+      <span id="results-title">Results</span>
+      <button id="clear-btn">Clear all</button>
     </div>
     <div id="results-list"></div>
   </div>
 
-  <!-- ── Bottom Bar ── -->
-  <div id="bottom-bar">
-    <button id="toggle-btn">📷 Back to Camera</button>
-  </div>
-
-  <div id="version">v0.19-debug</div>
+  <div id="version">v0.20</div>
 
   <script>
-  // ─────────────────────────────────────────────────────────────────────────
-  // Firebase config  (User: omerdekelmigdal100)
-  // Replace YOUR_* values from Firebase Console → Project settings → Your apps
-  // ─────────────────────────────────────────────────────────────────────────
-  const firebaseConfig = {
-    apiKey:            "YOUR_API_KEY",
-    authDomain:        "puzzl123.firebaseapp.com",
-    projectId:         "puzzl123",
-    storageBucket:     "puzzl123.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId:             "YOUR_APP_ID"
-  };
-  // import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
-  // const app = initializeApp(firebaseConfig);
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // CONFIG
-  // ─────────────────────────────────────────────────────────────────────────
-  const CONFIG = {
-    CLUE_BORDER_WIDTH : 0.07,   // blob border = min(w,h) * this
-  };
+  const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
+  const LS_LANG = 'puzzl_lang';
 
   const BLOB_COLORS = [
     '#f87171','#fb923c','#facc15','#4ade80',
     '#60a5fa','#c084fc','#f472b6','#34d399',
     '#38bdf8','#a78bfa','#fbbf24','#86efac',
   ];
-
   const DIR_ARROW = {
-    'left'      : '←', 'right'     : '→', 'down': '↓',
-    'down-left' : '↙', 'left-down' : '↙',
-    'down-right': '↘', 'right-down': '↘',
+    'left':'←','right':'→','down':'↓',
+    'down-left':'↙','left-down':'↙',
+    'down-right':'↘','right-down':'↘',
   };
-
-  const MAX_BLOBS   = 6;    // free-tier: 15 RPM → keep calls low
-  const MIN_GAP_MS  = 4500; // enforce ≥4.5 s between request *starts* (<13 RPM)
-
   const LANGUAGES = [
-    { code: 'heb', label: 'עברית'   },
-    { code: 'eng', label: 'English' },
-    { code: 'ara', label: 'عربي'    },
-    { code: 'spa', label: 'Español' },
-    { code: 'fra', label: 'Français'},
-    { code: 'deu', label: 'Deutsch' },
-    { code: 'rus', label: 'Русский' },
-    { code: 'tur', label: 'Türkçe'  },
+    { code:'heb', label:'עברית' },
+    { code:'eng', label:'English' },
+    { code:'ara', label:'عربي' },
+    { code:'spa', label:'Español' },
+    { code:'fra', label:'Français' },
+    { code:'deu', label:'Deutsch' },
+    { code:'rus', label:'Русский' },
+    { code:'tur', label:'Türkçe' },
   ];
 
-  const STEPS = ['Capture', 'Find clue cells', 'Preview blobs', 'AI analysis', 'Place answers'];
-
-  const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
-  const LS_LANG = 'puzzl_lang';
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // DOM REFS
-  // ─────────────────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
-  const video             = $('video');
-  const captureCanvas     = $('capture-canvas');
-  const scanBtn           = $('scan-btn');
-  const processingOverlay = $('processing-overlay');
-  const stepLabel         = $('step-label');
-  const stepTrack         = $('step-track');
-  const solutionView      = $('solution-view');
-  const solutionCanvas    = $('solution-canvas');
-  const resultsList       = $('results-list');
-  const bottomBar         = $('bottom-bar');
-  const toggleBtn         = $('toggle-btn');
-  const langSelect        = $('lang-select');
-  const errorPanel        = $('error-panel');
-  const errorMsg          = $('error-msg');
-  const errorBackBtn      = $('error-back-btn');
+  const video            = $('video');
+  const captureCanvas    = $('capture-canvas');
+  const aimBox           = $('aim-box');
+  const scanBtn          = $('scan-btn');
+  const analyzingOverlay = $('analyzing-overlay');
+  const errorPanel       = $('error-panel');
+  const errorMsg         = $('error-msg');
+  const errorBackBtn     = $('error-back-btn');
+  const resultsList      = $('results-list');
+  const resultsPanel     = $('results-panel');
+  const clearBtn         = $('clear-btn');
+  const langSelect       = $('lang-select');
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // STATE
-  // ─────────────────────────────────────────────────────────────────────────
-  const state = {
-    hasSolution    : false,
-    inSolutionMode : false,
-    dictIndex      : null,   // Map<length, Array<{clue, answer}>>
-  };
+  let cardIndex = 0;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CAMERA
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Camera ──────────────────────────────────────────────────────────────────
   async function startCamera() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width:  { ideal: 3840, min: 640 },
-          height: { ideal: 2160, min: 480 },
-        },
+        video: { facingMode:{ ideal:'environment' }, width:{ ideal:3840, min:640 }, height:{ ideal:2160, min:480 } },
         audio: false,
       });
       video.srcObject = stream;
-    } catch (err) {
-      alert('Camera unavailable: ' + err.message);
-    }
+    } catch (err) { alert('Camera unavailable: ' + err.message); }
   }
 
   async function captureFrame() {
-    // Prefer ImageCapture.takePhoto() — captures at full sensor resolution
-    // (e.g. 12–48 MP on modern Android) rather than the video stream cap (~1080p)
     if (window.ImageCapture && video.srcObject) {
       try {
         const track   = video.srcObject.getVideoTracks()[0];
@@ -359,187 +262,53 @@
         captureCanvas.getContext('2d').drawImage(bitmap, 0, 0);
         bitmap.close();
         return;
-      } catch (_) { /* fall through */ }
+      } catch (_) {}
     }
-    // Fallback: grab current video frame
     captureCanvas.width  = video.videoWidth  || 640;
     captureCanvas.height = video.videoHeight || 480;
     captureCanvas.getContext('2d').drawImage(video, 0, 0);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // BLOB DETECTION  (replaces grid detection + cell classification + slot extraction)
-  // Finds text-density regions directly from the image — no grid lines needed.
-  // ─────────────────────────────────────────────────────────────────────────
+  // Map aim-box screen coordinates → captureCanvas pixel crop
+  function cropAimBoxBase64() {
+    const boxRect = aimBox.getBoundingClientRect();
+    const vidRect = video.getBoundingClientRect();
 
-  function toGray(data, size) {
-    const g = new Uint8Array(size);
-    for (let i = 0; i < size; i++)
-      g[i] = (data[i*4]*77 + data[i*4+1]*150 + data[i*4+2]*29) >> 8;
-    return g;
-  }
+    const streamW = video.videoWidth  || captureCanvas.width;
+    const streamH = video.videoHeight || captureCanvas.height;
+    const dispW   = vidRect.width;
+    const dispH   = vidRect.height;
+    const photoW  = captureCanvas.width;
+    const photoH  = captureCanvas.height;
 
-  function otsu(gray) {
-    const hist = new Int32Array(256);
-    for (const v of gray) hist[v]++;
-    const N = gray.length;
-    let sum = 0;
-    for (let i = 0; i < 256; i++) sum += i * hist[i];
-    let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t];
-      if (!wB) continue;
-      const wF = N - wB;
-      if (!wF) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB, mF = (sum - sumB) / wF;
-      const v = wB * wF * (mB - mF) ** 2;
-      if (v > maxVar) { maxVar = v; thresh = t; }
-    }
-    return (thresh > 30 && thresh < 220) ? thresh : 128;
-  }
+    // object-fit: cover — scale that fills the display area
+    const coverScale = Math.max(dispW / streamW, dispH / streamH);
+    const offX = (dispW - streamW * coverScale) / 2;
+    const offY = (dispH - streamH * coverScale) / 2;
 
-  // Find connected regions whose pixel darkness is in the "text" range (20%–82%).
-  // A solid black cell is >82%; an empty white cell is <20%; printed text sits between.
-  function findTextBlobs(gray, W, H, thresh) {
-    const BLOCK = Math.max(12, Math.floor(Math.min(W, H) / 45));
-    const bW = Math.ceil(W / BLOCK), bH = Math.ceil(H / BLOCK);
+    // Box position in display coords → stream pixel coords
+    const relX = boxRect.left - vidRect.left;
+    const relY = boxRect.top  - vidRect.top;
+    const sX = (relX - offX) / coverScale;
+    const sY = (relY - offY) / coverScale;
+    const sW = boxRect.width  / coverScale;
+    const sH = boxRect.height / coverScale;
 
-    const map = new Float32Array(bW * bH);
-    for (let by = 0; by < bH; by++)
-      for (let bx = 0; bx < bW; bx++) {
-        let dark = 0, total = 0;
-        for (let y = by*BLOCK; y < Math.min((by+1)*BLOCK, H); y += 2)
-          for (let x = bx*BLOCK; x < Math.min((bx+1)*BLOCK, W); x += 2) {
-            if (gray[y*W+x] < thresh) dark++;
-            total++;
-          }
-        map[by*bW+bx] = total ? dark/total : 0;
-      }
+    // Stream pixels → full-photo pixels (ImageCapture may be higher res)
+    const scaleX = photoW / streamW;
+    const scaleY = photoH / streamH;
+    const px = Math.max(0, Math.round(sX * scaleX));
+    const py = Math.max(0, Math.round(sY * scaleY));
+    const pw = Math.min(Math.round(sW * scaleX), photoW - px);
+    const ph = Math.min(Math.round(sH * scaleY), photoH - py);
 
-    const TEXT_MIN = 0.20, TEXT_MAX = 0.82, MIN_BLOCKS = 6;
-    const visited = new Uint8Array(bW * bH);
-    const blobs = [];
-
-    for (let by = 0; by < bH; by++) {
-      for (let bx = 0; bx < bW; bx++) {
-        const idx = by*bW + bx;
-        if (visited[idx] || map[idx] < TEXT_MIN || map[idx] > TEXT_MAX) continue;
-
-        const cells = [], queue = [idx];
-        visited[idx] = 1;
-        while (queue.length) {
-          const cur = queue.pop();
-          cells.push(cur);
-          const cx = cur % bW, cy = (cur / bW) | 0;
-          for (const [dx, dy] of [[-1,0],[1,0],[0,-1],[0,1]]) {
-            const nx = cx+dx, ny = cy+dy;
-            if (nx<0||nx>=bW||ny<0||ny>=bH) continue;
-            const ni = ny*bW+nx;
-            if (visited[ni] || map[ni]<TEXT_MIN || map[ni]>TEXT_MAX) continue;
-            visited[ni] = 1;
-            queue.push(ni);
-          }
-        }
-        if (cells.length < MIN_BLOCKS) continue;
-
-        let x0=W, x1=0, y0=H, y1=0;
-        for (const i of cells) {
-          const bx2=i%bW, by2=(i/bW)|0;
-          x0=Math.min(x0,bx2*BLOCK);   x1=Math.max(x1,Math.min((bx2+1)*BLOCK,W));
-          y0=Math.min(y0,by2*BLOCK);   y1=Math.max(y1,Math.min((by2+1)*BLOCK,H));
-        }
-        blobs.push({ x:x0, y:y0, w:x1-x0, h:y1-y0 });
-      }
-    }
-    return blobs;
-  }
-
-  // Average darkness of a pixel rectangle in the grayscale buffer
-  function sampleRegion(gray, W, x, y, w, h) {
-    const H2 = (gray.length / W) | 0;
-    const x0=Math.max(0,x|0), x1=Math.min(W,(x+w)|0);
-    const y0=Math.max(0,y|0), y1=Math.min(H2,(y+h)|0);
-    if (x0>=x1||y0>=y1) return 0;
-    let dark=0, total=0;
-    for (let py=y0; py<y1; py+=2)
-      for (let px=x0; px<x1; px+=2) {
-        if (gray[py*W+px] < 128) dark++;
-        total++;
-      }
-    return total ? dark/total : 0;
-  }
-
-  // Walk from a blob in one direction, counting consecutive empty answer cells.
-  // Stops at a solid dark (blocked) region or another text region.
-  // dir: 'left' | 'right' | 'down'
-  function countCells(blob, dir, gray, W, H) {
-    const cW = blob.w, cH = blob.h;
-    let x, y, dx, dy;
-    if      (dir === 'left')  { x = blob.x - cW;    y = blob.y; dx = -cW; dy = 0;  }
-    else if (dir === 'right') { x = blob.x + cW;     y = blob.y; dx =  cW; dy = 0;  }
-    else                      { x = blob.x; y = blob.y + cH;     dx =  0;  dy = cH; }
-
-    let count = 0;
-    for (let step = 0; step < 25; step++) {
-      if (x+cW > W+5 || y+cH > H+5 || x < -5 || y < -5) break;
-      const ratio = sampleRegion(gray, W, x, y, cW, cH);
-      if   (ratio > 0.70) break;   // solid dark → blocked → end of slot
-      if   (ratio < 0.32) count++; // empty answer cell
-      else                break;   // another clue cell → stop
-      x += dx; y += dy;
-    }
-    return count;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // DICTIONARY
-  // Format: "clue - answer1, answer2, ..."  (Hebrew or English)
-  // Indexed by answer length for O(1) lookup.
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // In Hebrew crosswords final-letter forms are kept as base forms so words can cross.
-  // Normalize ן→נ ם→מ ף→פ ך→כ ץ→צ when indexing and matching.
-  const FINAL_NORM = { 'ן':'נ', 'ם':'מ', 'ף':'פ', 'ך':'כ', 'ץ':'צ' };
-  const normHeb = s => s.replace(/[ןםףךץ]/g, c => FINAL_NORM[c]);
-
-  function parseDictionary(json) {
-    const index = new Map();
-    const data  = JSON.parse(json);
-    for (const [clue, val] of Object.entries(data)) {
-      const answers = Array.isArray(val) ? val : [val];
-      for (const raw of answers) {
-        const answer = normHeb(raw.trim());
-        const len    = [...answer].length;
-        if (!index.has(len)) index.set(len, []);
-        index.get(len).push({ clue, answer });
-      }
-    }
-    return index;
-  }
-
-  async function loadDictionary() {
-    try {
-      const res = await fetch('./dict.json');
-      if (!res.ok) return;
-      state.dictIndex = parseDictionary(await res.text());
-    } catch (e) {
-      console.warn('Dictionary unavailable:', e.message);
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // AI SOLVER  (Gemini Vision — browser-direct, no Cloud Function)
-  // Single round per blob: is it a clue? read it. solve it.
-  // ─────────────────────────────────────────────────────────────────────────
-
-  function cropBlobBase64(blob) {
     const tmp = document.createElement('canvas');
-    tmp.width = blob.w; tmp.height = blob.h;
-    tmp.getContext('2d').drawImage(captureCanvas, blob.x, blob.y, blob.w, blob.h, 0, 0, blob.w, blob.h);
-    return tmp.toDataURL('image/jpeg', 0.85).split(',')[1];
+    tmp.width = pw; tmp.height = ph;
+    tmp.getContext('2d').drawImage(captureCanvas, px, py, pw, ph, 0, 0, pw, ph);
+    return tmp.toDataURL('image/jpeg', 0.92).split(',')[1];
   }
 
+  // ── Gemini call ─────────────────────────────────────────────────────────────
   async function callGeminiVision(imageBase64) {
     const resp = await fetch(ANALYZE_CELL_URL, {
       method : 'POST',
@@ -548,251 +317,102 @@
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      throw new Error(err.error?.message || `HTTP ${resp.status}`);
+      throw new Error(err.error || `HTTP ${resp.status}`);
     }
     return resp.json();
   }
 
-  // Sequential with MIN_GAP_MS between request starts to stay under 15 RPM.
-  // onResult fires after each blob so the UI can update live.
-  async function analyzeCluesWithAI(blobs, onResult) {
-    const topBlobs = [...blobs].sort((a,b) => b.w*b.h - a.w*a.h).slice(0, MAX_BLOBS);
-    const allResults = [];
-    let lastStart = 0;
-
-    for (let i = 0; i < topBlobs.length; i++) {
-      const blob  = topBlobs[i];
-      const color = BLOB_COLORS[i % BLOB_COLORS.length];
-
-      const wait = MIN_GAP_MS - (Date.now() - lastStart);
-      if (wait > 0) await new Promise(r => setTimeout(r, wait));
-      lastStart = Date.now();
-
-      let result;
-      try {
-        const data = await callGeminiVision(cropBlobBase64(blob));
-        // Debug card: always show what Gemini returned
-        appendDebug(i + 1, topBlobs.length, data);
-        result = { blob, data, color };
-      } catch (e) {
-        appendDebug(i + 1, topBlobs.length, null, e.message);
-        result = { blob, data: { isClue: false }, color };
-      }
-
-      allResults.push(result);
-      onResult(result, i, topBlobs.length);
-    }
-
-    return allResults;
+  // ── UI helpers ───────────────────────────────────────────────────────────────
+  function flashAimBox(ok) {
+    aimBox.style.borderColor = ok ? '#4ade80' : '#f87171';
+    setTimeout(() => { aimBox.style.borderColor = ''; }, 700);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // RENDERER
-  // ─────────────────────────────────────────────────────────────────────────
-
-  function renderPhoto(allResults) {
-    solutionCanvas.width  = captureCanvas.width;
-    solutionCanvas.height = captureCanvas.height;
-    const ctx = solutionCanvas.getContext('2d');
-    ctx.drawImage(captureCanvas, 0, 0);
-
-    for (const { blob, data, color } of allResults) {
-      const lw = Math.max(3, Math.round(Math.min(blob.w, blob.h) * CONFIG.CLUE_BORDER_WIDTH));
-      ctx.save();
-      if (data.isClue) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth   = lw;
-        ctx.shadowColor  = color;
-        ctx.shadowBlur   = lw * 2;
-      } else {
-        ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-        ctx.lineWidth   = Math.max(1, lw - 1);
-      }
-      ctx.strokeRect(blob.x + lw / 2, blob.y + lw / 2, blob.w - lw, blob.h - lw);
-      ctx.restore();
-    }
-  }
-
-  function makeCard(clueText, answer, dirArrow, color) {
+  function makeAnswerCard(clueText, answer, arrow, color) {
     const card = document.createElement('div');
     card.className = 'answer-card';
     card.style.cssText = `--c:${color}`;
-    const clue = clueText || '—';
     card.innerHTML =
-      `<div class="card-meta"><div class="card-dot"></div><span class="card-dir">${dirArrow}</span></div>` +
-      `<div class="card-clue">${clue}</div>` +
+      `<div class="card-meta"><div class="card-dot"></div><span class="card-dir">${arrow}</span></div>` +
+      `<div class="card-clue">${clueText || ''}</div>` +
       `<div class="card-answer">${answer}</div>`;
     return card;
   }
 
-  function appendDebug(n, total, data, err) {
+  function makeMsgCard(text) {
     const el = document.createElement('div');
-    el.style.cssText = 'font-size:11px;color:#888;padding:6px 10px;border-left:2px solid #333;margin:2px 0;font-family:monospace;word-break:break-all;';
-    if (err) {
-      el.style.borderColor = '#f87171';
-      el.style.color = '#f87171';
-      el.textContent = `[${n}/${total}] ERROR: ${err}`;
+    el.className = 'msg-card';
+    el.textContent = text;
+    return el;
+  }
+
+  function showResult(data) {
+    const color = BLOB_COLORS[cardIndex++ % BLOB_COLORS.length];
+    const arrow = DIR_ARROW[data.arrowDirection || ''] || '?';
+    const hasH  = (data.horizAnswer || '').length > 0;
+    const hasD  = (data.downAnswer  || '').length > 0;
+
+    if (!data.isClue) {
+      flashAimBox(false);
+      resultsList.prepend(makeMsgCard('Not a clue cell — try again.'));
+    } else if (!hasH && !hasD) {
+      flashAimBox(false);
+      resultsList.prepend(makeMsgCard(`Clue: "${data.clueText || '?'}" — no answer found.`));
     } else {
-      el.style.borderColor = data?.isClue ? '#4ade80' : '#555';
-      el.textContent = `[${n}/${total}] isClue=${data?.isClue} dir=${data?.arrowDirection} h=${data?.horizAnswer} d=${data?.downAnswer}`;
+      flashAimBox(true);
+      if (hasD) resultsList.prepend(makeAnswerCard(data.clueText, data.downAnswer,  '↓',   color));
+      if (hasH) resultsList.prepend(makeAnswerCard(data.clueText, data.horizAnswer, arrow, color));
     }
-    resultsList.appendChild(el);
+
+    resultsPanel.style.display = 'flex';
   }
 
-  function appendResult({ data, color }) {
-    if (!data.isClue) return;
-    const dir    = data.arrowDirection || '';
-    const arrow  = DIR_ARROW[dir] || '→';
-    const hasH   = data.horizAnswer && data.horizAnswer.length > 0;
-    const hasD   = data.downAnswer  && data.downAnswer.length  > 0;
-    if (hasH) resultsList.appendChild(makeCard(data.clueText, data.horizAnswer, arrow,           color));
-    if (hasD) resultsList.appendChild(makeCard(data.clueText, data.downAnswer,  DIR_ARROW.down,  color));
-  }
-
-  function showNoResults() {
-    if (resultsList.children.length === 0) {
-      const p = document.createElement('p');
-      p.className   = 'no-results';
-      p.textContent = 'No clues solved. Make sure clue cells are clearly visible and well-lit.';
-      resultsList.appendChild(p);
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // PIPELINE
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const yieldUI = () => new Promise(r => setTimeout(r, 16));
-
-  function setStep(i) {
-    stepLabel.textContent = STEPS[i];
-    [...stepTrack.children].forEach((el, j) => {
-      el.classList.toggle('active', j === i);
-      el.classList.toggle('done',   j <  i);
-    });
-  }
-
-  function showError(msg) {
-    processingOverlay.style.display = 'none';
-    errorMsg.textContent = msg;
-    errorPanel.style.display = 'flex';
-  }
-
+  // ── Pipeline ─────────────────────────────────────────────────────────────────
   async function runPipeline() {
-    [...stepTrack.children].forEach(el => el.className = 'step-item');
-    processingOverlay.style.display = 'flex';
-    errorPanel.style.display        = 'none';
+    scanBtn.disabled = true;
+    errorPanel.style.display = 'none';
+    analyzingOverlay.style.display = 'flex';
 
     try {
-      // 0 — Capture
-      setStep(0);
       await captureFrame();
-
-      const W = captureCanvas.width, H = captureCanvas.height;
-      const imgData = captureCanvas.getContext('2d').getImageData(0, 0, W, H);
-      const gray    = toGray(imgData.data, W * H);
-      const thresh  = otsu(gray);
-
-      // 1 — Find text blobs
-      setStep(1);
-      await yieldUI();
-      const blobs = findTextBlobs(gray, W, H, thresh);
-      if (blobs.length === 0) {
-        showError('No text regions found.\nMake sure the crossword fills the frame, is well-lit, and held flat.');
-        return;
-      }
-
-      // 2 — Draw photo with faint outlines on all blobs, show results screen early
-      setStep(2);
-      await yieldUI();
-      const topBlobs = [...blobs].sort((a,b) => b.w*b.h - a.w*a.h).slice(0, MAX_BLOBS);
-      const placeholder = topBlobs.map((blob, i) => ({ blob, data: { isClue: false }, color: BLOB_COLORS[i % BLOB_COLORS.length] }));
-      renderPhoto(placeholder);
-      resultsList.innerHTML = '';
-
-      // Transition to results view while AI runs in the background
-      processingOverlay.style.display = 'none';
-      solutionView.style.display      = 'flex';
-      bottomBar.style.display         = 'flex';
-      toggleBtn.textContent           = '📷 Back to Camera';
-      state.hasSolution    = true;
-      state.inSolutionMode = true;
-
-      // 3 — AI: sequential, one blob at a time, cards appear live
-      const liveResults = [...placeholder]; // mutated as results arrive
-      const allResults = await analyzeCluesWithAI(blobs, (result, i, total) => {
-        stepLabel.textContent = `Solving ${i + 1} / ${total}…`;
-        liveResults[i] = result;
-        renderPhoto(liveResults);
-        appendResult(result);
-      });
-
-      // Final redraw + empty-state guard
-      renderPhoto(allResults);
-      showNoResults();
-
+      const b64  = cropAimBoxBase64();
+      const data = await callGeminiVision(b64);
+      showResult(data);
     } catch (err) {
-      showError('Processing failed: ' + err.message);
+      errorMsg.textContent = err.message;
+      errorPanel.style.display = 'flex';
+    } finally {
+      analyzingOverlay.style.display = 'none';
+      scanBtn.disabled = false;
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // UI INIT
-  // ─────────────────────────────────────────────────────────────────────────
-
+  // ── Language ─────────────────────────────────────────────────────────────────
   function initLangSelector() {
     const saved = localStorage.getItem(LS_LANG) || 'heb';
     LANGUAGES.forEach(({ code, label }) => {
       const opt = document.createElement('option');
-      opt.value       = code;
-      opt.textContent = label;
+      opt.value = code; opt.textContent = label;
       if (code === saved) opt.selected = true;
       langSelect.appendChild(opt);
     });
-    langSelect.addEventListener('change', () => {
-      localStorage.setItem(LS_LANG, langSelect.value);
-    });
+    langSelect.addEventListener('change', () => localStorage.setItem(LS_LANG, langSelect.value));
   }
 
-  function initStepTrack() {
-    STEPS.forEach(label => {
-      const el = document.createElement('div');
-      el.className   = 'step-item';
-      el.textContent = label;
-      stepTrack.appendChild(el);
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // EVENTS
-  // ─────────────────────────────────────────────────────────────────────────
-
+  // ── Events ───────────────────────────────────────────────────────────────────
   scanBtn.addEventListener('click', runPipeline);
 
-  toggleBtn.addEventListener('click', () => {
-    if (state.inSolutionMode) {
-      solutionView.style.display = 'none';
-      state.inSolutionMode       = false;
-      toggleBtn.textContent      = '🔍 View Solution';
-    } else {
-      solutionView.style.display = 'flex';
-      state.inSolutionMode       = true;
-      toggleBtn.textContent      = '📷 Back to Camera';
-    }
+  clearBtn.addEventListener('click', () => {
+    resultsList.innerHTML = '';
+    resultsPanel.style.display = 'none';
+    cardIndex = 0;
   });
 
-  errorBackBtn.addEventListener('click', () => {
-    errorPanel.style.display = 'none';
-  });
+  errorBackBtn.addEventListener('click', () => { errorPanel.style.display = 'none'; });
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // BOOT
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Boot ─────────────────────────────────────────────────────────────────────
   initLangSelector();
-  initStepTrack();
   startCamera();
-  loadDictionary();
-
   </script>
 </body>
 </html>
