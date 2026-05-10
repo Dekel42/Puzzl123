@@ -18,7 +18,7 @@
       position: absolute;
       top: 37%;
       left: 50%;
-      width: min(72vw, 340px);
+      width: min(36vw, 170px);
       aspect-ratio: 3 / 2;
       transform: translate(-50%, -50%);
       box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
@@ -313,7 +313,7 @@
     const resp = await fetch(ANALYZE_CELL_URL, {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body   : JSON.stringify({ imageBase64, rightLength: 0, downLength: 0 }),
+      body   : JSON.stringify({ imageBase64, rightLength: 0, downLength: 0, language: langSelect.value }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));

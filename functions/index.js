@@ -19,35 +19,43 @@ exports.analyzeCell = onRequest(
       mimeType    = 'image/jpeg',
       rightLength = 0,
       downLength  = 0,
+      language    = 'heb',
     } = req.body || {};
 
     if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required' });
 
+    const LANG_NAMES = {
+      heb: 'Hebrew', eng: 'English', ara: 'Arabic', spa: 'Spanish',
+      fra: 'French', deu: 'German',  rus: 'Russian', tur: 'Turkish',
+    };
+    const langName = LANG_NAMES[language] || 'Hebrew';
+
     const hints = [];
     if (rightLength > 0) hints.push(`Horizontal answer must be exactly ${rightLength} letters.`);
     if (downLength  > 0) hints.push(`Down answer must be exactly ${downLength} letters.`);
+    if (!rightLength && !downLength) hints.push('No letter count given — choose the most natural single-word crossword answer (typically 2–8 letters).');
 
-    const prompt = `You are analyzing a cropped cell from a crossword puzzle photo.
+    const prompt = `You are analyzing a cropped cell from a ${langName} crossword puzzle photo.
 
 A CLUE cell contains printed text (a definition, typically 2+ words) and a small arrow pointing
-toward the empty answer cells. Hebrew puzzles use left arrows and down arrows. English use right and down.
+toward the empty answer cells. Hebrew/Arabic puzzles use left arrows and down arrows. English/European use right and down.
 An ANSWER cell is blank or has only a single handwritten letter/digit — it is NOT a clue cell.
 
 ${hints.join('\n')}
 
 If this IS a clue cell:
-1. Read the printed text exactly (ignore the arrow symbol itself).
-2. Identify ALL arrow directions present: any of "left", "right", "down",
-   "down-left", "left-down", "down-right", "right-down".
-3. Solve the clue for each direction with the given letter count (if provided).
+1. Read the printed text exactly as it appears (ignore the arrow symbol itself).
+2. Identify the arrow direction: "left", "right", "down", "down-left", "left-down", "down-right", or "right-down".
+3. Solve the clue in ${langName}. The answer must be a single word with no spaces.
+   Think like a crossword editor: use common crossword vocabulary, proper nouns are allowed.
 
 Respond with ONLY valid JSON, no markdown:
 {
   "isClue": true | false,
-  "clueText": "clue text or null",
+  "clueText": "exact clue text or null",
   "arrowDirection": "left" | "right" | "down" | "down-left" | "left-down" | "down-right" | "right-down" | null,
-  "horizAnswer": "answer for horizontal direction or null",
-  "downAnswer":  "answer for down direction or null"
+  "horizAnswer": "single-word answer for horizontal direction or null",
+  "downAnswer":  "single-word answer for down direction or null"
 }`;
 
     try {
