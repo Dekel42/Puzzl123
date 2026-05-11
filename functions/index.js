@@ -28,30 +28,13 @@ exports.analyzeCell = onRequest(
     };
     const langName = LANG_NAMES[language] || 'Hebrew';
 
-    const prompt = `Analyze the image. You will see two types of markings:
+    const prompt = `Please solve the crossword clue in this image. This is a ${langName} crossword puzzle cell.
 
-Printed Text: These are the crossword clues. FOCUS ONLY ON THESE.
-Handwritten Marks: These are user attempts. IGNORE THEM for clue extraction.
+Return ONLY a JSON array, no markdown:
+[{"clue": "clue text", "direction": "left/right/down/down-left/left-down/down-right/right-down", "answers": ["answer1", "answer2"]}]
 
-This is a ${langName} crossword puzzle.
-The clue cell is roughly in the centre of the image. Adjacent cells extend in the arrow direction.
-
-For EACH clue visible:
-1. Read the printed clue text exactly.
-2. Identify the arrow direction: "left", "right", "down", "down-left", "left-down", "down-right", "right-down".
-3. Count the empty answer cells the arrow points to. Stop counting when you reach a thick grid line, the puzzle edge, or another cell that contains printed text and an arrow. That count is the answer length.
-4. Suggest ALL plausible single-word ${langName} answers of EXACTLY that length. More options is better.
-
-Return ONLY a valid JSON array, no markdown:
-[
-  {
-    "clue": "exact printed clue text",
-    "direction": "left" | "right" | "down" | "down-left" | "left-down" | "down-right" | "right-down",
-    "answerLength": <integer>,
-    "answers": ["word1", "word2", "word3"]
-  }
-]
-If no printed clue with an arrow is visible, return: []`;
+If the number of answer cells suggests multiple lengths, include answers at each likely length.
+If no clue is visible, return: []`;
 
     try {
       const genAI = new GoogleGenerativeAI(geminiKey.value());
