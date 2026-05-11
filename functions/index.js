@@ -28,12 +28,11 @@ exports.analyzeCell = onRequest(
     };
     const langName = LANG_NAMES[language] || 'Hebrew';
 
-    const prompt = `Please solve the crossword clue in this image. This is a ${langName} crossword puzzle cell.
+    const prompt = `Can you solve this crossword puzzle for me? The text is in ${langName}.
 
 Return ONLY a JSON array, no markdown:
 [{"clue": "clue text", "direction": "left/right/down/down-left/left-down/down-right/right-down", "answers": ["answer1", "answer2"]}]
 
-If the number of answer cells suggests multiple lengths, include answers at each likely length.
 If no clue is visible, return: []`;
 
     try {

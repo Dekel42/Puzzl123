@@ -13,7 +13,6 @@
     #video { width: 100%; height: 100%; object-fit: cover; display: block; }
     #capture-canvas { display: none; }
 
-    /* ── Aim overlay: box-shadow creates dark shade everywhere except the box ── */
     #aim-box {
       position: absolute;
       top: 37%;
@@ -21,23 +20,11 @@
       width: min(36vw, 170px);
       aspect-ratio: 3 / 2;
       transform: translate(-50%, -50%);
-      border: 2px solid rgba(255, 255, 255, 0.9);
       border-radius: 4px;
       pointer-events: none;
       z-index: 5;
-      transition: border-color 0.4s;
+      transition: border 0.4s;
     }
-    /* Corner brackets for viewfinder feel */
-    #aim-box::before, #aim-box::after {
-      content: '';
-      position: absolute;
-      width: 20px; height: 20px;
-      border-color: #fff;
-      border-style: solid;
-      opacity: 0.9;
-    }
-    #aim-box::before { top: -4px; left: -4px;   border-width: 3px 0 0 3px; border-radius: 3px 0 0 0; }
-    #aim-box::after  { bottom: -4px; right: -4px; border-width: 0 3px 3px 0; border-radius: 0 0 3px 0; }
     #aim-label {
       position: absolute;
       top: calc(100% + 12px);
@@ -196,7 +183,7 @@
     <div id="results-list"></div>
   </div>
 
-  <div id="version">v0.28</div>
+  <div id="version">v0.29</div>
 
   <script>
   const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
@@ -310,8 +297,8 @@
 
   // ── UI helpers ───────────────────────────────────────────────────────────────
   function flashAimBox(ok) {
-    aimBox.style.borderColor = ok ? '#4ade80' : '#f87171';
-    setTimeout(() => { aimBox.style.borderColor = ''; }, 700);
+    aimBox.style.border = `2px solid ${ok ? '#4ade80' : '#f87171'}`;
+    setTimeout(() => { aimBox.style.border = ''; }, 700);
   }
 
   function cropThumb() {
