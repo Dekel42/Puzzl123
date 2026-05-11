@@ -183,7 +183,7 @@
     <div id="results-list"></div>
   </div>
 
-  <div id="version">v0.29</div>
+  <div id="version">v0.30</div>
 
   <script>
   const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
@@ -240,44 +240,13 @@
     } catch (err) { alert('Camera unavailable: ' + err.message); }
   }
 
-  // Crop the aim-box directly from the video element.
-  // Drawing from <video> guarantees coordinates match the display —
-  // avoids rotation/aspect-ratio mismatches with ImageCapture photos.
-  function cropAimBoxBase64() {
-    const boxRect = aimBox.getBoundingClientRect();
-    const vidRect = video.getBoundingClientRect();
-
-    const streamW = video.videoWidth  || 1280;
-    const streamH = video.videoHeight || 720;
-    const dispW   = vidRect.width;
-    const dispH   = vidRect.height;
-
-    // object-fit: cover scale
-    const coverScale = Math.max(dispW / streamW, dispH / streamH);
-    const offX = (dispW - streamW * coverScale) / 2;
-    const offY = (dispH - streamH * coverScale) / 2;
-
-    // Aim-box in stream pixel coords
-    const relX = boxRect.left - vidRect.left;
-    const relY = boxRect.top  - vidRect.top;
-    const sX = Math.max(0, (relX - offX) / coverScale);
-    const sY = Math.max(0, (relY - offY) / coverScale);
-    const sW = Math.min(boxRect.width  / coverScale, streamW - sX);
-    const sH = Math.min(boxRect.height / coverScale, streamH - sY);
-
-    const MIN_PX = 480;
-    const upscale = Math.max(1, MIN_PX / Math.min(sW, sH));
-    const outW = Math.round(sW * upscale);
-    const outH = Math.round(sH * upscale);
-
+  function captureFrameBase64() {
+    const w = video.videoWidth  || 1280;
+    const h = video.videoHeight || 720;
     const tmp = document.createElement('canvas');
-    tmp.width = outW; tmp.height = outH;
-    const ctx = tmp.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, outW, outH);
-    ctx.drawImage(video, sX, sY, sW, sH, 0, 0, outW, outH);
-
-    lastCropDataUrl = tmp.toDataURL('image/jpeg', 0.95);
+    tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').drawImage(video, 0, 0, w, h);
+    lastCropDataUrl = tmp.toDataURL('image/jpeg', 0.92);
     return lastCropDataUrl.split(',')[1];
   }
 
@@ -358,7 +327,7 @@
     analyzingOverlay.style.display = 'flex';
 
     try {
-      const b64  = cropAimBoxBase64();
+      const b64  = captureFrameBase64();
       const data = await callGeminiVision(b64);
       showResult(data);
     } catch (err) {
