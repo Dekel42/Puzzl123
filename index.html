@@ -197,7 +197,7 @@
     <div id="results-list"></div>
   </div>
 
-  <div id="version">v0.24</div>
+  <div id="version">v0.25</div>
 
   <script>
   const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
@@ -292,43 +292,8 @@
     ctx.fillRect(0, 0, outW, outH);
     ctx.drawImage(video, sX, sY, sW, sH, 0, 0, outW, outH);
 
-    enhanceForOCR(ctx, outW, outH);
-
-    lastCropDataUrl = tmp.toDataURL('image/jpeg', 0.92);
+    lastCropDataUrl = tmp.toDataURL('image/jpeg', 0.95);
     return lastCropDataUrl.split(',')[1];
-  }
-
-  // Otsu global threshold → binary black/white image.
-  // Printed text (dark ink) survives; light pencil handwriting becomes white.
-  function enhanceForOCR(ctx, w, h) {
-    const id   = ctx.getImageData(0, 0, w, h);
-    const d    = id.data;
-    const gray = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++)
-      gray[i] = (d[i*4]*77 + d[i*4+1]*150 + d[i*4+2]*29) >> 8;
-
-    // Otsu threshold
-    const hist = new Int32Array(256);
-    for (const v of gray) hist[v]++;
-    const N = gray.length;
-    let sum = 0;
-    for (let i = 0; i < 256; i++) sum += i * hist[i];
-    let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t]; if (!wB) continue;
-      const wF = N - wB; if (!wF) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB, mF = (sum - sumB) / wF;
-      const vv = wB * wF * (mB - mF) ** 2;
-      if (vv > maxVar) { maxVar = vv; thresh = t; }
-    }
-
-    for (let i = 0; i < w * h; i++) {
-      const v = gray[i] < thresh ? 0 : 255;
-      d[i*4] = d[i*4+1] = d[i*4+2] = v;
-      d[i*4+3] = 255;
-    }
-    ctx.putImageData(id, 0, 0);
   }
 
   // ── Gemini call ─────────────────────────────────────────────────────────────
