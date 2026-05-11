@@ -31,25 +31,27 @@ exports.analyzeCell = onRequest(
     const prompt = `Analyze the image. You will see two types of markings:
 
 Printed Text: These are the crossword clues. FOCUS ONLY ON THESE.
-Handwritten Marks: These are user attempts. IGNORE THEM for clue extraction, but use them to confirm if the cell is already "solved".
+Handwritten Marks: These are user attempts. IGNORE THEM for clue extraction.
 
-Your Task: Extract the Printed Text and identify the arrow's direction relative to the text.
+This is a ${langName} crossword puzzle.
+The clue cell is roughly in the centre of the image. Adjacent cells extend in the arrow direction.
 
-This is a ${langName} crossword puzzle. You may see parts of neighbouring cells at the edges — focus on the main central content.
-
-Return ALL clues visible in the image (there may be more than one).
-For each clue, suggest ALL plausible single-word answers across multiple lengths — the more options the better.
-Answers must be single words with no spaces, in ${langName}.
+For EACH clue visible:
+1. Read the printed clue text exactly.
+2. Identify the arrow direction: "left", "right", "down", "down-left", "left-down", "down-right", "right-down".
+3. Count the empty answer cells the arrow points to. Stop counting when you reach a thick grid line, the puzzle edge, or another cell that contains printed text and an arrow. That count is the answer length.
+4. Suggest ALL plausible single-word ${langName} answers of EXACTLY that length. More options is better.
 
 Return ONLY a valid JSON array, no markdown:
 [
   {
     "clue": "exact printed clue text",
     "direction": "left" | "right" | "down" | "down-left" | "left-down" | "down-right" | "right-down",
+    "answerLength": <integer>,
     "answers": ["word1", "word2", "word3"]
   }
 ]
-If no printed clue with an arrow is visible, return an empty array: []`;
+If no printed clue with an arrow is visible, return: []`;
 
     try {
       const genAI = new GoogleGenerativeAI(geminiKey.value());
