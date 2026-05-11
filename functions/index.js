@@ -5,21 +5,19 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios                  = require('axios');
 const cheerio                = require('cheerio');
 
-const geminiKey = defineSecret('GEMINI_API_KEY'); // v0.23
+const geminiKey = defineSecret('GEMINI_API_KEY'); // v0.24
 
 const FINAL_NORM = { 'ן':'נ', 'ם':'מ', 'ף':'פ', 'ך':'כ', 'ץ':'צ' };
-const norm = s => s.replace(/[ןםףךץ]/g, c => FINAL_NORM[c]);
+const norm = s => String(s).replace(/[ןםףךץ]/g, c => FINAL_NORM[c]);
 
-// ── Gemini Vision: validate clue cell + solve ────────────────────────────────
+// ── Gemini Vision: extract clues + solve ─────────────────────────────────────
 exports.analyzeCell = onRequest(
   { cors: true, secrets: [geminiKey] },
   async (req, res) => {
     const {
       imageBase64,
-      mimeType    = 'image/jpeg',
-      rightLength = 0,
-      downLength  = 0,
-      language    = 'heb',
+      mimeType = 'image/jpeg',
+      language = 'heb',
     } = req.body || {};
 
     if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required' });
@@ -30,41 +28,34 @@ exports.analyzeCell = onRequest(
     };
     const langName = LANG_NAMES[language] || 'Hebrew';
 
-    const hints = [];
-    if (rightLength > 0) hints.push(`Horizontal answer must be exactly ${rightLength} letters.`);
-    if (downLength  > 0) hints.push(`Down answer must be exactly ${downLength} letters.`);
-    if (!rightLength && !downLength) hints.push('No letter count given — choose the most natural single-word crossword answer (typically 2–8 letters).');
+    const prompt = `Analyze the image. You will see two types of markings:
 
-    const prompt = `You are analyzing a cropped cell from a ${langName} crossword puzzle photo.
-You may see parts of neighbouring cells at the edges — focus on the main content in the centre.
+Printed Text: These are the crossword clues. FOCUS ONLY ON THESE.
+Handwritten Marks: These are user attempts. IGNORE THEM for clue extraction, but use them to confirm if the cell is already "solved".
 
-A CLUE cell has printed text (a word or phrase definition) AND a visible arrow (←↓↙↘→↗).
-Even a single printed word next to an arrow counts as a clue cell.
-An ANSWER cell is blank white space or contains only a single handwritten letter — no arrow.
+Your Task: Extract the Printed Text and identify the arrow's direction relative to the text.
 
-${hints.join('\n')}
+This is a ${langName} crossword puzzle. You may see parts of neighbouring cells at the edges — focus on the main central content.
 
-If this IS a clue cell:
-1. Read the printed text exactly (ignore the arrow symbol itself).
-2. Identify the arrow direction: "left", "right", "down", "down-left", "left-down", "down-right", or "right-down".
-3. Solve the clue in ${langName}. Answer must be a single word, no spaces.
-   Use common crossword vocabulary; proper nouns are allowed.
-   If you cannot solve it confidently, return null for that answer field.
+Return ALL clues visible in the image (there may be more than one).
+For each clue, suggest ALL plausible single-word answers across multiple lengths — the more options the better.
+Answers must be single words with no spaces, in ${langName}.
 
-Respond with ONLY valid JSON, no markdown:
-{
-  "isClue": true | false,
-  "clueText": "exact clue text or null",
-  "arrowDirection": "left" | "right" | "down" | "down-left" | "left-down" | "down-right" | "right-down" | null,
-  "horizAnswer": "answer or null",
-  "downAnswer":  "answer or null"
-}`;
+Return ONLY a valid JSON array, no markdown:
+[
+  {
+    "clue": "exact printed clue text",
+    "direction": "left" | "right" | "down" | "down-left" | "left-down" | "down-right" | "right-down",
+    "answers": ["word1", "word2", "word3"]
+  }
+]
+If no printed clue with an arrow is visible, return an empty array: []`;
 
     try {
       const genAI = new GoogleGenerativeAI(geminiKey.value());
       const model = genAI.getGenerativeModel({
         model            : 'gemini-2.5-flash',
-        generationConfig : { temperature: 0.1, maxOutputTokens: 600 },
+        generationConfig : { temperature: 0.2, maxOutputTokens: 800 },
       });
 
       const result = await model.generateContent({
@@ -74,23 +65,30 @@ Respond with ONLY valid JSON, no markdown:
         ]}],
       });
 
-      const raw       = result.response.text();
-      logger.info('raw response', raw.slice(0, 500));
-      const firstBrace = raw.indexOf('{');
-      const lastBrace  = raw.lastIndexOf('}');
-      if (firstBrace === -1 || lastBrace <= firstBrace) {
-        logger.error('no JSON object in response', raw.slice(0, 200));
-        return res.json({ isClue: false, clueText: null, arrowDirection: null, horizAnswer: null, downAnswer: null });
-      }
-      const parsed = JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+      const raw   = result.response.text();
+      logger.info('raw response', raw.slice(0, 600));
 
-      if (parsed.horizAnswer) parsed.horizAnswer = norm(parsed.horizAnswer);
-      if (parsed.downAnswer)  parsed.downAnswer  = norm(parsed.downAnswer);
+      const first = raw.indexOf('[');
+      const last  = raw.lastIndexOf(']');
+      if (first === -1 || last <= first) {
+        logger.warn('no JSON array in response', raw.slice(0, 200));
+        return res.json([]);
+      }
+
+      const parsed = JSON.parse(raw.slice(first, last + 1));
+
+      for (const item of parsed) {
+        if (Array.isArray(item.answers)) {
+          item.answers = item.answers.map(norm).filter(a => a.length > 0);
+        } else {
+          item.answers = [];
+        }
+      }
 
       return res.json(parsed);
     } catch (err) {
       logger.error('analyzeCell error', err.message);
-      return res.status(500).json({ error: err.message, isClue: false });
+      return res.status(500).json({ error: err.message });
     }
   }
 );

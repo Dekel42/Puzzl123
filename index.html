@@ -150,7 +150,8 @@
     .card-dot  { width: 8px; height: 8px; border-radius: 50%; background: var(--c, #555); flex-shrink: 0; }
     .card-dir  { font-size: 18px; line-height: 1; }
     .card-clue { font-size: 13px; color: #888; line-height: 1.4; }
-    .card-answer { font-size: 22px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+    .card-answers { font-size: 13px; color: #ddd; line-height: 1.7; }
+    .card-len  { color: #4ade80; font-weight: 700; margin-right: 4px; }
     .msg-card {
       text-align: center; color: #666; font-size: 14px;
       padding: 12px 16px; border-radius: 10px; background: #1a1a1a;
@@ -196,7 +197,7 @@
     <div id="results-list"></div>
   </div>
 
-  <div id="version">v0.23</div>
+  <div id="version">v0.24</div>
 
   <script>
   const ANALYZE_CELL_URL = 'https://us-central1-puzzl123.cloudfunctions.net/analyzeCell';
@@ -297,39 +298,35 @@
     return lastCropDataUrl.split(',')[1];
   }
 
-  // Boost contrast then sharpen so Gemini reads text more reliably
+  // Otsu global threshold → binary black/white image.
+  // Printed text (dark ink) survives; light pencil handwriting becomes white.
   function enhanceForOCR(ctx, w, h) {
-    // Contrast boost
-    let id = ctx.getImageData(0, 0, w, h);
-    let d  = id.data;
-    const f = 1.5, bias = 128 * (1 - f);
-    for (let i = 0; i < d.length; i += 4) {
-      d[i]   = Math.max(0, Math.min(255, f * d[i]   + bias));
-      d[i+1] = Math.max(0, Math.min(255, f * d[i+1] + bias));
-      d[i+2] = Math.max(0, Math.min(255, f * d[i+2] + bias));
-    }
-    ctx.putImageData(id, 0, 0);
+    const id   = ctx.getImageData(0, 0, w, h);
+    const d    = id.data;
+    const gray = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++)
+      gray[i] = (d[i*4]*77 + d[i*4+1]*150 + d[i*4+2]*29) >> 8;
 
-    // Sharpen (3×3 kernel)
-    id = ctx.getImageData(0, 0, w, h);
-    const src = new Uint8ClampedArray(id.data);
-    d = id.data;
-    const K = [0, -1, 0, -1, 5, -1, 0, -1, 0];
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4;
-        for (let c = 0; c < 3; c++) {
-          let v = 0;
-          for (let ky = -1; ky <= 1; ky++) {
-            for (let kx = -1; kx <= 1; kx++) {
-              const ny = Math.max(0, Math.min(h - 1, y + ky));
-              const nx = Math.max(0, Math.min(w - 1, x + kx));
-              v += src[(ny * w + nx) * 4 + c] * K[(ky + 1) * 3 + (kx + 1)];
-            }
-          }
-          d[i + c] = Math.max(0, Math.min(255, v));
-        }
-      }
+    // Otsu threshold
+    const hist = new Int32Array(256);
+    for (const v of gray) hist[v]++;
+    const N = gray.length;
+    let sum = 0;
+    for (let i = 0; i < 256; i++) sum += i * hist[i];
+    let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t]; if (!wB) continue;
+      const wF = N - wB; if (!wF) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB, mF = (sum - sumB) / wF;
+      const vv = wB * wF * (mB - mF) ** 2;
+      if (vv > maxVar) { maxVar = vv; thresh = t; }
+    }
+
+    for (let i = 0; i < w * h; i++) {
+      const v = gray[i] < thresh ? 0 : 255;
+      d[i*4] = d[i*4+1] = d[i*4+2] = v;
+      d[i*4+3] = 255;
     }
     ctx.putImageData(id, 0, 0);
   }
@@ -359,15 +356,29 @@
     return `<img src="${lastCropDataUrl}" style="width:100%;max-height:80px;object-fit:contain;border-radius:6px;margin-bottom:4px;background:#000;">`;
   }
 
-  function makeAnswerCard(clueText, answer, arrow, color) {
+  function makeAnswerCard(clue, direction, answers, color) {
     const card = document.createElement('div');
     card.className = 'answer-card';
     card.style.cssText = `--c:${color}`;
+    const arrow = DIR_ARROW[direction] || direction || '?';
+
+    // Group answers by letter count
+    const byLen = {};
+    for (const a of answers) {
+      const len = [...a].length;
+      (byLen[len] = byLen[len] || []).push(a);
+    }
+    const answerHtml = Object.entries(byLen)
+      .sort(([a], [b]) => a - b)
+      .map(([len, words]) =>
+        `<div class="card-answers"><span class="card-len">${len}:</span>${words.join(' • ')}</div>`)
+      .join('');
+
     card.innerHTML =
       cropThumb() +
       `<div class="card-meta"><div class="card-dot"></div><span class="card-dir">${arrow}</span></div>` +
-      `<div class="card-clue">${clueText || ''}</div>` +
-      `<div class="card-answer">${answer}</div>`;
+      `<div class="card-clue">${clue || ''}</div>` +
+      (answerHtml || '<div class="card-answers" style="color:#666">No answer found</div>');
     return card;
   }
 
@@ -378,24 +389,17 @@
     return el;
   }
 
-  function showResult(data) {
-    const color = CARD_COLOR;
-    const arrow = DIR_ARROW[data.arrowDirection || ''] || '?';
-    const hasH  = (data.horizAnswer || '').length > 0;
-    const hasD  = (data.downAnswer  || '').length > 0;
-
-    if (!data.isClue) {
+  function showResult(items) {
+    if (!Array.isArray(items) || items.length === 0) {
       flashAimBox(false);
-      resultsList.prepend(makeMsgCard('Not a clue cell — try again.'));
-    } else if (!hasH && !hasD) {
-      flashAimBox(false);
-      resultsList.prepend(makeMsgCard(`Clue: "${data.clueText || '?'}" — no answer found.`));
-    } else {
-      flashAimBox(true);
-      if (hasD) resultsList.prepend(makeAnswerCard(data.clueText, data.downAnswer,  '↓',   color));
-      if (hasH) resultsList.prepend(makeAnswerCard(data.clueText, data.horizAnswer, arrow, color));
+      resultsList.prepend(makeMsgCard('No clue found — try again.'));
+      resultsPanel.style.display = 'flex';
+      return;
     }
-
+    flashAimBox(true);
+    for (const { clue, direction, answers } of [...items].reverse()) {
+      resultsList.prepend(makeAnswerCard(clue, direction, answers || [], CARD_COLOR));
+    }
     resultsPanel.style.display = 'flex';
   }
 
